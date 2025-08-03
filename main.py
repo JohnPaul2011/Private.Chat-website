@@ -178,5 +178,4 @@ def disconnect():
 
 
 if __name__ == "__main__":
-    print(f'\n * Running on http://{localhost_ip}:5500/')
-    socketio.run(app, host=localhost_ip, port=5500)
+    socketio.run(app, host=localhost_ip)
