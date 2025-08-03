@@ -9,8 +9,6 @@ import datetime
 import os
 import random
 
-localhost_ip = "127.0.0.1"
-
 start_T = str(datetime.datetime.now())
 init_color(convert=True, strip=False)
 
@@ -178,4 +176,4 @@ def disconnect():
 
 
 if __name__ == "__main__":
-    socketio.run(app, host=localhost_ip)
+    socketio.run(app)
