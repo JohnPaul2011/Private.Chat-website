@@ -6,7 +6,6 @@ import logging
 from colorama import init as init_color
 from colorama import Fore
 import datetime
-import json
 import os
 import random
 
@@ -179,5 +178,5 @@ def disconnect():
 
 
 if __name__ == "__main__":
-    print(f'\n * Running on http://{localhost_ip}:55000/')
+    print(f'\n * Running on http://{localhost_ip}:5500/')
     socketio.run(app, host=localhost_ip, port=5500)
