@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Private.chat</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
+  <script
+      src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"
+      integrity="sha512-q/dWJ3kcmjBLU4Qc47E4A9kTB4m3wuTY7vkFJDTZKjTs8jhyGQnaUrxa0Ytd0ssMZhbNua9hE+E7Qv1j+DyZwA=="
+      crossorigin="anonymous"
+    ></script>
+  <script>
+    setTimeout(() => {
+      document.querySelectorAll(".flash-msg").forEach(msg => {
+        msg.classList.add("hide");
+        setTimeout(() => msg.remove(), 800);
+      });
+    }, 3000);
+  </script> 
+</head>
+<body>
+
+  {% with messages = get_flashed_messages(with_categories=true) %}
+  {% if messages %}
+      {% for category, message in messages %}
+      <div class="flash-msg flash-{{ category }}">{{ message }}</div>
+      {% endfor %}
+  {% endif %}
+  {% endwith %}
+  
+  <div class="title">
+    <h1>Private.chat</h1>
+      <h3>Hello, {{ username }}</h3>
+  </div>
+
+  <ul>
+    <li><a class="active" href="/">Home</a></li>
+    <!--<li><a href="/Chat">Chat</a></li>!-->
+    <li class="dropdown">
+      <a class="dropbtn">Chat ▼</a>
+      <div class="dropdown-content">
+          {% if not code %}
+            <a href="/join">Join a Room</a>
+            <a href="/create">Create a Room</a>
+          {% else %}
+            <a href="{{ url_for('disconnect_route') }}">Disconnect from chat</a>
+          {% endif %}
+      </div>
+    </li>
+    <li class="dropdown">
+        <a class="dropbtn">Games ▼</a>
+        <div class="dropdown-content">
+            <a href="https://venge.io">Venge.io</a>
+            <a href="https://deadshot.io">Deadshot.io</a>
+            <a href="https://www.crazygames.com">Crazygames</a>
+            <a href="https://poki.com">Poki</a>
+        </div>
+    </li>
+    <li class="li-right"><a href="#about">Help</a></li>
+  </ul>
+  {% block main %}{% endblock %}
+
+</body>
+</html>
