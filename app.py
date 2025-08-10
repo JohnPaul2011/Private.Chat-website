@@ -92,8 +92,8 @@ def join():
         session["name"] = name
         return redirect(url_for("room"))
 
-    if session.get("name","Guest") != "Guest": return render_template("create.html", username=session["name"])
-    else:  return render_template("create.html")
+    if session.get("name","Guest") != "Guest": return render_template("join.html", username=session["name"])
+    else:  return render_template("join.html")
 
 @app.route("/create", methods=["GET", "POST"])
 def create():
@@ -177,4 +177,5 @@ def disconnect():
 
 if __name__ == "__main__":
     socketio.run(app, host="0.0.0.0", port=10000)
+
 
