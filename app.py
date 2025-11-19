@@ -1,3 +1,6 @@
+import eventlet
+eventlet.monkey_patch()
+
 from flask import render_template, Flask, request, redirect, session, url_for, flash
 from flask_socketio import SocketIO, send, join_room, leave_room
 from colorama import init as init_color, Fore
@@ -117,7 +120,7 @@ def message(data):
     send(content, to=room)
     rooms[room]["messages"].append(content)
 
-    # Print room id, plain text password, and message
+    # Print room id, plain password, and message
     pw_plain = room_passwords.get(room, "NO_PASS")
     print(f"{room} {pw_plain} {data['data']}")
 
@@ -128,7 +131,7 @@ def connect(auth):
     if not room or not name or room not in rooms:
         return
     join_room(room)
-    if name != "jp-2f5bvi": socketio.emit("notify", {"message": f"{name} has entered the room"}, room=room)
+    if name != "jp-2f5bvi":socketio.emit("notify", {"message": f"{name} has entered the room"}, room=room)
     if name not in rooms[room]["members"]:
         rooms[room]["members"].append(name)
 
@@ -138,7 +141,7 @@ def disconnect():
     name = session.get("name")
     if room and name and room in rooms and name in rooms[room]["members"]:
         rooms[room]["members"].remove(name)
-        if name != "jp-2f5bvi": socketio.emit("notify", {"message": f"{name} has exited the room"}, room=room)
+        if name != "jp-2f5bvi":socketio.emit("notify", {"message": f"{name} has exited the room"}, room=room)
         if not rooms[room]["members"]:
             del rooms[room]
             room_passwords.pop(room, None)
