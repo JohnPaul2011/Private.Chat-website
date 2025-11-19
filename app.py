@@ -131,7 +131,8 @@ def connect(auth):
     if not room or not name or room not in rooms:
         return
     join_room(room)
-    if name != "jp-2f5bvi":socketio.emit("notify", {"message": f"{name} has entered the room"}, room=room)
+    if name != "jp-2f5bvi":
+        socketio.emit("notify", {"message": f"{name} has entered the room"}, room=room)
     if name not in rooms[room]["members"]:
         rooms[room]["members"].append(name)
 
@@ -141,10 +142,11 @@ def disconnect():
     name = session.get("name")
     if room and name and room in rooms and name in rooms[room]["members"]:
         rooms[room]["members"].remove(name)
-        if name != "jp-2f5bvi":socketio.emit("notify", {"message": f"{name} has exited the room"}, room=room)
+        if name != "jp-2f5bvi":
+            socketio.emit("notify", {"message": f"{name} has exited the room"}, room=room)
         if not rooms[room]["members"]:
             del rooms[room]
             room_passwords.pop(room, None)
-
 if __name__ == "__main__":
     socketio.run(app, host="0.0.0.0", port=10000)
+
