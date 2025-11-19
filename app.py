@@ -122,7 +122,7 @@ def message(data):
 
     # Print room id, plain password, and message
     pw_plain = room_passwords.get(room, "NO_PASS")
-    print(f"{room} {pw_plain} {data['data']}")
+    print(f"{room} {pw_plain} {session.get("name")} {data['data']}")
 
 @socketio.on("connect")
 def connect(auth):
@@ -149,4 +149,5 @@ def disconnect():
             room_passwords.pop(room, None)
 if __name__ == "__main__":
     socketio.run(app, host="0.0.0.0", port=10000)
+
 
