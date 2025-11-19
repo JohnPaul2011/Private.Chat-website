@@ -40,12 +40,8 @@
     <li class="dropdown">
       <a class="dropbtn">Chat ▼</a>
       <div class="dropdown-content">
-          {% if not code %}
             <a href="/join">Join a Room</a>
             <a href="/create">Create a Room</a>
-          {% else %}
-            <a href="{{ url_for('disconnect_route') }}">Disconnect from chat</a>
-          {% endif %}
       </div>
     </li>
     <li class="dropdown">
@@ -63,3 +59,4 @@
 
 </body>
 </html>
+
