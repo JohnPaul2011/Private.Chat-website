@@ -5,14 +5,14 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Private.chat</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css')}}">
-    <!--<script>
+    <script>
         setTimeout(() => {
           document.querySelectorAll(".flash-msg").forEach(msg => {
             msg.classList.add("hide");
             setTimeout(() => msg.remove(), 800);
           });
         }, 3000);
-      </script>-->        
+      </script>      
 </head>
 <body>
     
@@ -29,7 +29,7 @@
         <form method="POST">
           <input name="name" placeholder="Username" value="{{username}}" required autocomplete="off">
           <input name="code" placeholder="Room ID" value="{{code}}" autocomplete="off">
-          <input name="password" placeholder="Room password" required="" autocomplete="off">
+          <input name="password" placeholder="Room password"  autocomplete="off">
           <button name="create" type="submit">Create</button>
         </form>
     </div>
