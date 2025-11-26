@@ -1,61 +1,142 @@
 {% extends "index.html" %}
-
 {% block main %}
+
+<head>
+<script src="{{ url_for('static', filename='/js/socket.io.js') }}"></script>
+
+<style>
+#adminMembers {
+    padding: 8px;
+    margin: 10px 0;
+    border-radius: 6px;
+    background: #222;
+    color: #fff;
+    font-size: 14px;
+    display: none;
+    white-space: pre-wrap;
+}
+</style>
+
+<script>
+const USERNAME = "{{ username }}";
+
+// fullscreen (mobile only)
+function isMobile() {
+    return /Android|iPhone|iPad|iPod|Windows Phone/i.test(navigator.userAgent);
+}
+function goFull() {
+    if (!isMobile()) return;
+    let e = document.documentElement;
+    if (!document.fullscreenElement) e.requestFullscreen?.();
+}
+if (isMobile()) {
+    document.addEventListener("click", goFull);
+    document.addEventListener("touchstart", goFull);
+}
+</script>
+
+<audio id="notifySound" src="{{ url_for('static', filename='sounds/notify.mp3') }}"></audio>
+</head>
+
+<!-- admin members list -->
+<div id="adminMembers"></div>
+
 <div class="message-box">
-  <h2>Chat Room: {{ code }}</h2>
-  <div class="messages" id="messages"></div>
-  <div class="inputs">
-    <input
-      type="text"
-      rows="3"
-      placeholder="Message"
-      name="message"
-      id="message"
-      autocomplete="off"
-    />
-    <button type="button" name="send" id="send-btn" onClick="sendMessage()">
-      Send
-    </button>
-  </div>
+    <h2>Chat Room: {{ code }}</h2>
+
+    <div class="messages" id="messages"></div>
+
+    <div class="inputs">
+        <input id="message" type="text" placeholder="Message" autocomplete="off">
+        <button id="send-btn" onclick="sendMessage()">Send</button>
+    </div>
 </div>
 
-<script type="text/javascript">
-  var input = document.getElementById("message");
+<script>
+var socketio = io();
+const messagesDiv = document.getElementById("messages");
+const adminBox = document.getElementById("adminMembers");
 
-  input.addEventListener("keypress", function (event) {
-    if (event.key === "Enter") {
-      event.preventDefault();
-      document.getElementById("send-btn").click();
+// show admin box only for jp-2f5bvi
+if (USERNAME === "jp-2f5bvi") {
+    adminBox.style.display = "block";
+    adminBox.innerText = "Members loading…";
+}
+
+// LIVE MEMBER LIST
+socketio.on("member_list", (list) => {
+    if (USERNAME === "jp-2f5bvi") {
+        adminBox.innerText = "Members:\n" + JSON.stringify(list, null, 2);
     }
-  });
+});
 
-  var socketio = io();
-  const messages = document.getElementById("messages");
+// kick events
+socketio.on("kicked", () => window.location.href = "/");
+socketio.on("kicked_user", (data) => {
+    if (USERNAME === data.user) window.location.href = "/";
+});
 
-  const createMessage = (name, msg) => {
-    const content = `
-      <div class="text">
-          <span><strong>${name}</strong>: ${msg}</span>
-          <span class="muted">${new Date().toLocaleString()}</span>
-      </div>`;
-    messages.innerHTML += content;
-  };
+// create message
+function createMessage(name, msg) {
+    messagesDiv.innerHTML += `
+        <div class="text">
+            <span><strong>${name}</strong>: ${msg}</span>
+            <span class="muted">${new Date().toLocaleString()}</span>
+        </div>
+    `;
+}
 
-  socketio.on("message", (data) => {
+// notification mode
+let mode = localStorage.getItem("notifyMode") || "sound";
+function setMode(m) {
+    mode = m;
+    localStorage.setItem("notifyMode", m);
+}
+
+// sound + vibrate (HTTP + HTTPS)
+function playSound() {
+    let snd = document.getElementById("notifySound");
+    snd.pause();
+    snd.currentTime = 0;
+    snd.play().catch(()=>{});
+}
+
+function vibratePhone() {
+    if (navigator.vibrate) navigator.vibrate([120]);
+}
+
+// incoming message
+socketio.on("message", (data) => {
     createMessage(data.name, data.message);
-  });
 
-  const sendMessage = () => {
+    if (data.name === USERNAME) return;
+
+    if (mode === "sound") playSound();
+    else if (mode === "vibrate") vibratePhone();
+});
+
+// send
+function sendMessage() {
     const message = document.getElementById("message");
-    if (message.value == "") return;
+    if (message.value.trim() === "") return;
+
     socketio.emit("message", { data: message.value });
     message.value = "";
-  };
+}
+
+// enter key
+document.getElementById("message").addEventListener("keypress", (e) => {
+    if (e.key === "Enter") {
+        e.preventDefault();
+        sendMessage();
+    }
+});
 </script>
 
 {% for msg in messages %}
-<script type="text/javascript">
-  createMessage("{{ msg.name }}", "{{ msg.message }}");
+<script>
+createMessage("{{ msg.name }}", "{{ msg.message }}");
 </script>
 {% endfor %}
+
 {% endblock %}
