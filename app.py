@@ -15,12 +15,14 @@ app = Flask(__name__)
 app.config['SECRET_KEY'] = "never_gonna_give_you_up"
 socketio = SocketIO(app)
 
-BAD_USERNAMES = {"admin", "server", "system", "moderator", "host"}
+BAD_USERNAMES = {"admin", "server", "system", "moderator", "host", "guest"}
 
 pages = {"home": "index.html"}
 
 rooms = {}            # {room_id: {"members": [], "messages": []}}
 room_passwords = {}   # {room_id: pw}
+
+PUBLIC_ROOM = "public"
 
 
 def username_taken(name):
@@ -149,6 +151,36 @@ def logout():
     return redirect(url_for("index"))
 
 
+@app.route("/public", methods=["GET", "POST"])
+def public():
+    if request.method == "POST":
+        name = request.form.get("name")
+
+        if not name:
+            flash("Please enter a name.", "error")
+            return render_template("public.html")
+
+        if name.lower() in BAD_USERNAMES:
+            flash("This username is not allowed.", "error")
+            return render_template("public.html", username=name)
+
+        if username_taken(name):
+            flash("This username is already in use.", "error")
+            return render_template("public.html", username=name)
+
+        # Auto-create public room if not exists
+        if PUBLIC_ROOM not in rooms:
+            rooms[PUBLIC_ROOM] = {"members": [], "messages": []}
+            room_passwords[PUBLIC_ROOM] = ""
+
+        session["room"] = PUBLIC_ROOM
+        session["name"] = name
+
+        return redirect(url_for("room"))
+
+    return render_template("public.html", username=session.get("name", "Guest"))
+
+
 # -----------------------------
 #      SOCKET: MESSAGING
 # -----------------------------
@@ -209,7 +241,7 @@ def kick_user(room_id, user):
 
         socketio.emit("member_list", room["members"], room=room_id)
 
-    return redirect("/")
+    return redirect("/room")
 
 
 # -----------------------------
@@ -247,7 +279,8 @@ def disconnect():
 
         socketio.emit("member_list", rooms[room]["members"], room=room)
 
-        if not rooms[room]["members"]:
+        # Do not delete the public room when empty
+        if not rooms[room]["members"] and room != PUBLIC_ROOM:
             del rooms[room]
             room_passwords.pop(room, None)
 
