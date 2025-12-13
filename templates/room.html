@@ -15,6 +15,28 @@
     display: none;
     white-space: pre-wrap;
 }
+
+#kickControls {
+    padding: 8px;
+    margin: 10px 0;
+    border-radius: 6px;
+    background: #f0f0f0;
+    display: none;
+}
+
+#kickControls button {
+    margin: 2px;
+    padding: 4px 8px;
+    background: #ff4d4d;
+    color: white;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+}
+
+#kickControls button:hover {
+    background: #cc0000;
+}
 </style>
 
 <script>
@@ -41,6 +63,13 @@ if (isMobile()) {
 <!-- admin members list -->
 <div id="adminMembers"></div>
 
+<!-- kick controls for admin -->
+<div id="kickControls">
+    <strong>Admin Controls:</strong>
+    <button onclick="kickAll()">Kick All</button>
+    <div id="memberButtons"></div>
+</div>
+
 <div class="message-box">
     <h2>Chat Room: {{ code }}</h2>
 
@@ -56,19 +85,35 @@ if (isMobile()) {
 var socketio = io();
 const messagesDiv = document.getElementById("messages");
 const adminBox = document.getElementById("adminMembers");
+const kickControls = document.getElementById("kickControls");
+const memberButtons = document.getElementById("memberButtons");
 
-// show admin box only for jp-2f5bvi
+// show admin sections only for jp-2f5bvi
 if (USERNAME === "jp-2f5bvi") {
     adminBox.style.display = "block";
     adminBox.innerText = "Members loading…";
+    kickControls.style.display = "block";
 }
 
 // LIVE MEMBER LIST
 socketio.on("member_list", (list) => {
     if (USERNAME === "jp-2f5bvi") {
         adminBox.innerText = "Members:\n" + JSON.stringify(list, null, 2);
+        // update kick buttons
+        memberButtons.innerHTML = "";
+        list.forEach(user => {
+            const btn = document.createElement("button");
+            btn.innerText = `Kick ${user}`;
+            btn.onclick = () => window.location.href = `/kick/{{ code }}/${user}`;
+            memberButtons.appendChild(btn);
+        });
     }
 });
+
+// kick all function
+function kickAll() {
+    window.location.href = `/kickall/{{ code }}`;
+}
 
 // kick events
 socketio.on("kicked", () => window.location.href = "/");
@@ -98,7 +143,7 @@ function playSound() {
     let snd = document.getElementById("notifySound");
     snd.pause();
     snd.currentTime = 0;
-    snd.play().catch(()=>{});
+    snd.play().catch(()=>{});  // catch for autoplay policy
 }
 
 function vibratePhone() {

@@ -233,7 +233,7 @@ def kick_user(room_id, user):
         return redirect("/")
 
     if user in room["members"]:
-        send({"name": "", "message": f"{user} was kicked"}, room=room_id)
+        socketio.emit("message", {"name": "", "message": f"{user} was kicked"}, room=room_id)
 
         socketio.emit("kicked_user", {"user": user}, room=room_id)
 
