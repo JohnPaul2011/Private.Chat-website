@@ -1,5 +1,5 @@
-import eventlet
-eventlet.monkey_patch()
+from gevent import monkey
+monkey.patch_all()
 
 from flask import render_template, Flask, request, redirect, session, url_for, flash, jsonify
 from flask_socketio import SocketIO, send, join_room, leave_room, emit
@@ -23,6 +23,7 @@ rooms = {}            # {room_id: {"members": [], "messages": []}}
 room_passwords = {}   # {room_id: pw}
 
 PUBLIC_ROOM = "public"
+ADMIN_NAME = os.getenv("ADMIN_NAME", "jp-2f5bvi")
 
 
 def username_taken(name):
@@ -42,14 +43,14 @@ def index():
 
 @app.route("/lcr")
 def list_chats_raw():
-    if session.get("name") == "jp-2f5bvi":
+    if session.get("name") == ADMIN_NAME:
         return jsonify(room_passwords)
     return redirect("/")
 
 
 @app.route("/clear/<id>")
 def delete_chat(id):
-    if session.get("name") == "jp-2f5bvi":
+    if session.get("name") == ADMIN_NAME:
         room = rooms.get(id, False)
         room["messages"] = []
         print(f"cleared messages for {id}")
@@ -141,7 +142,8 @@ def room():
     room = session.get("room")
     if not room or session.get("name") is None or room not in rooms:
         return redirect("/")
-    return render_template("room.html", code=room, messages=rooms[room]["messages"], username=session["name"])
+    is_admin = session.get("name") == ADMIN_NAME
+    return render_template("room.html", code=room, messages=rooms[room]["messages"], username=session["name"], is_admin=is_admin)
 
 
 @app.route("/logout")
@@ -189,7 +191,7 @@ def message(data):
     room = session.get("room")
     name = session.get("name")
 
-    if name == "jp-2f5bvi":
+    if name == ADMIN_NAME:
         name = ""
 
     if room not in rooms:
@@ -205,7 +207,7 @@ def message(data):
 # -----------------------------
 @app.route("/kickall/<room_id>")
 def kick_all(room_id):
-    if session.get("name") != "jp-2f5bvi":
+    if session.get("name") != ADMIN_NAME:
         return redirect("/")
 
     room = rooms.get(room_id)
@@ -225,14 +227,14 @@ def kick_all(room_id):
 
 @app.route("/kick/<room_id>/<user>")
 def kick_user(room_id, user):
-    if session.get("name") != "jp-2f5bvi":
+    if session.get("name") != ADMIN_NAME:
         return redirect("/")
 
     room = rooms.get(room_id)
     if not room:
         return redirect("/")
 
-    if user == "jp-2f5bvi":
+    if user == ADMIN_NAME:
         return redirect("/room")
 
     if user in room["members"]:
@@ -263,7 +265,7 @@ def connect(auth):
     if name not in rooms[room]["members"]:
         rooms[room]["members"].append(name)
 
-    if name != "jp-2f5bvi":
+    if name != ADMIN_NAME:
         send({"name": name, "message": f"{name} entered the room"}, room=room)
 
     socketio.emit("member_list", rooms[room]["members"], room=room)
@@ -277,13 +279,12 @@ def disconnect():
     if room and name and room in rooms and name in rooms[room]["members"]:
         rooms[room]["members"].remove(name)
 
-        if name != "jp-2f5bvi":
+        if name != ADMIN_NAME:
             send({"name": name, "message": f"{name} left the room"}, room=room)
 
         socketio.emit("member_list", rooms[room]["members"], room=room)
 
-        # Do not delete the public room when empty
-        if not rooms[room]["members"] and room != PUBLIC_ROOM:
+        if not rooms[room]["members"]:
             del rooms[room]
             room_passwords.pop(room, None)
 
