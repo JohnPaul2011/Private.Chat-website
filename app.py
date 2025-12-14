@@ -1,6 +1,3 @@
-from gevent import monkey
-monkey.patch_all()
-
 from flask import render_template, Flask, request, redirect, session, url_for, flash, jsonify
 from flask_socketio import SocketIO, send, join_room, leave_room, emit
 from colorama import init as init_color, Fore
@@ -13,7 +10,7 @@ init_color(convert=True, strip=False)
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = "never_gonna_give_you_up"
-socketio = SocketIO(app)
+socketio = SocketIO(app, async_mode="eventlet")
 
 BAD_USERNAMES = {"admin", "server", "system", "moderator", "host", "guest"}
 
