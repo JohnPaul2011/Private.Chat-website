@@ -12,7 +12,6 @@
     background: #222;
     color: #fff;
     font-size: 14px;
-    display: none;
     white-space: pre-wrap;
 }
 
@@ -21,7 +20,6 @@
     margin: 10px 0;
     border-radius: 6px;
     background: #f0f0f0;
-    display: none;
 }
 
 #kickControls button {
@@ -41,7 +39,7 @@
 
 <script>
 const USERNAME = "{{ username }}";
-const IS_ADMIN = {{ 'true' if is_admin else 'false' | tojson }}; // Use tojson for safe output
+const IS_ADMIN = {{ 'true' if is_admin else 'false' | tojson }};
 // fullscreen (mobile only)
 function isMobile() {
     return /Android|iPhone|iPad|iPod|Windows Phone/i.test(navigator.userAgent);
@@ -61,6 +59,7 @@ if (isMobile()) {
 </head>
 
 <!-- admin members list -->
+{% if is_admin %}
 <div id="adminMembers"></div>
 
 <!-- kick controls for admin -->
@@ -69,6 +68,7 @@ if (isMobile()) {
     <button onclick="kickAll()">Kick All</button>
     <div id="memberButtons"></div>
 </div>
+{% endif %}
 
 <div class="message-box">
     <h2>Chat Room: {{ code }}</h2>
@@ -88,26 +88,17 @@ const adminBox = document.getElementById("adminMembers");
 const kickControls = document.getElementById("kickControls");
 const memberButtons = document.getElementById("memberButtons");
 
-// show admin sections only for admin
-if (IS_ADMIN) {
-    adminBox.style.display = "block";
-    adminBox.innerText = "Members loading…";
-    kickControls.style.display = "block";
-}
-
 // LIVE MEMBER LIST
 socketio.on("member_list", (list) => {
-    if (IS_ADMIN) {
-        adminBox.innerText = "Members:\n" + JSON.stringify(list, null, 2);
-        // update kick buttons
-        memberButtons.innerHTML = "";
-        list.forEach(user => {
-            const btn = document.createElement("button");
-            btn.innerText = `Kick ${user}`;
-            btn.onclick = () => window.location.href = `/kick/{{ code }}/${user}`;
-            memberButtons.appendChild(btn);
-        });
-    }
+    adminBox.innerText = "Members:\n" + JSON.stringify(list, null, 2);
+    // update kick buttons
+    memberButtons.innerHTML = "";
+    list.forEach(user => {
+        const btn = document.createElement("button");
+        btn.innerText = `Kick ${user}`;
+        btn.onclick = () => window.location.href = `/kick/{{ code }}/${user}`;
+        memberButtons.appendChild(btn);
+    });
 });
 
 // kick all function
