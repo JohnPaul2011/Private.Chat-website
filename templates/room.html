@@ -1,142 +1,159 @@
 {% extends "index.html" %}
 {% block main %}
 
-<head>
-<script src="{{ url_for('static', filename='/js/socket.io.js') }}"></script>
+<div class="room-wrapper">
 
-<style>
-#adminMembers {
-    padding: 8px;
-    margin: 10px 0;
-    border-radius: 6px;
-    background: #222;
-    color: #fff;
-    font-size: 14px;
-    display: none;
-    white-space: pre-wrap;
-}
-</style>
-
-<script>
-const USERNAME = "{{ username }}";
-
-// fullscreen (mobile only)
-function isMobile() {
-    return /Android|iPhone|iPad|iPod|Windows Phone/i.test(navigator.userAgent);
-}
-function goFull() {
-    if (!isMobile()) return;
-    let e = document.documentElement;
-    if (!document.fullscreenElement) e.requestFullscreen?.();
-}
-if (isMobile()) {
-    document.addEventListener("click", goFull);
-    document.addEventListener("touchstart", goFull);
-}
-</script>
-
-<audio id="notifySound" src="{{ url_for('static', filename='sounds/notify.mp3') }}"></audio>
-</head>
-
-<!-- admin members list -->
-<div id="adminMembers"></div>
-
-<div class="message-box">
-    <h2>Chat Room: {{ code }}</h2>
-
-    <div class="messages" id="messages"></div>
-
-    <div class="inputs">
-        <input id="message" type="text" placeholder="Message" autocomplete="off">
-        <button id="send-btn" onclick="sendMessage()">Send</button>
+  <!-- Chat header -->
+  <div class="navbar-msg">
+    <div class="navbar-left">
+      <div class="room-name">{{ code }}</div>
+      <div class="navbar-msg-info" id="conn-status">connecting…</div>
     </div>
+    <div class="navbar-actions">
+      <!-- Fullscreen toggle -->
+      <button id="fullscreen-btn" title="Fullscreen">
+        <!-- expand icon (default) -->
+        <svg id="fs-expand" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"
+             stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/>
+          <line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/>
+        </svg>
+        <!-- compress icon (fullscreen active) -->
+        <svg id="fs-compress" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"
+             stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
+             style="display:none">
+          <polyline points="4 14 10 14 10 20"/><polyline points="20 10 14 10 14 4"/>
+          <line x1="10" y1="14" x2="3" y2="21"/><line x1="21" y1="3" x2="14" y2="10"/>
+        </svg>
+      </button>
+      <!-- Leave -->
+      <button id="leave-btn" title="Leave room">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"
+             stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M3 5v14"/><path d="M21 12H7"/><path d="m15 18 6-6-6-6"/>
+        </svg>
+      </button>
+    </div>
+  </div>
+
+  <!-- Messages -->
+  <div class="messages" id="messages"></div>
+
+  <!-- Input bar -->
+  <div class="inputs">
+    <input id="message" type="text" placeholder="Type a message…" autocomplete="off">
+    <button id="send-btn" title="Send">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="white"
+           width="20" height="20">
+        <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/>
+      </svg>
+    </button>
+  </div>
+
 </div>
 
+<audio id="notifySound" src="{{ url_for('static', filename='sounds/notify.mp3') }}"></audio>
+
 <script>
-var socketio = io();
-const messagesDiv = document.getElementById("messages");
-const adminBox = document.getElementById("adminMembers");
+document.addEventListener("DOMContentLoaded", function () {
 
-// show admin box only for jp-2f5bvi
-if (USERNAME === "jp-2f5bvi") {
-    adminBox.style.display = "block";
-    adminBox.innerText = "Members loading…";
-}
+  const USERNAME      = "{{ username }}";
+  const messagesDiv   = document.getElementById("messages");
+  const msgInput      = document.getElementById("message");
+  const sendBtn       = document.getElementById("send-btn");
+  const leaveBtn      = document.getElementById("leave-btn");
+  const status        = document.getElementById("conn-status");
+  const roomWrapper   = document.querySelector(".room-wrapper");
+  const fsBtn         = document.getElementById("fullscreen-btn");
+  const fsExpand      = document.getElementById("fs-expand");
+  const fsCompress    = document.getElementById("fs-compress");
 
-// LIVE MEMBER LIST
-socketio.on("member_list", (list) => {
-    if (USERNAME === "jp-2f5bvi") {
-        adminBox.innerText = "Members:\n" + JSON.stringify(list, null, 2);
-    }
-});
+  /* ── Socket ── */
+  const socketio = io({ transports: ["websocket", "polling"] });
 
-// kick events
-socketio.on("kicked", () => window.location.href = "/");
-socketio.on("kicked_user", (data) => {
-    if (USERNAME === data.user) window.location.href = "/";
-});
+  socketio.on("connect", () => {
+    status.textContent = "online";
+    status.style.color = "";
+    status.style.animation = "statusPulse 1.5s ease 3";
+  });
 
-// create message
-function createMessage(name, msg) {
-    messagesDiv.innerHTML += `
-        <div class="text">
-            <span><strong>${name}</strong>: ${msg}</span>
-            <span class="muted">${new Date().toLocaleString()}</span>
-        </div>
-    `;
-}
+  socketio.on("disconnect", () => {
+    status.textContent = "reconnecting…";
+    status.style.color = "#e53935";
+    status.style.animation = "";
+  });
 
-// notification mode
-let mode = localStorage.getItem("notifyMode") || "sound";
-function setMode(m) {
-    mode = m;
-    localStorage.setItem("notifyMode", m);
-}
+  socketio.on("message", (data) => {
+    createMessage(data.name, data.message, data.timestamp);
+    if (data.name !== USERNAME) playSound();
+  });
 
-// sound + vibrate (HTTP + HTTPS)
-function playSound() {
-    let snd = document.getElementById("notifySound");
+  /* ── UI helpers ── */
+  function scrollToBottom() {
+    messagesDiv.scrollTop = messagesDiv.scrollHeight;
+  }
+
+  function createMessage(name, msg, timestamp) {
+    const isOwn = name === USERNAME;
+    const div = document.createElement("div");
+    div.className = isOwn ? "right-message-box" : "left-message-box";
+    div.innerHTML =
+      `<div class="username">${name}</div>` +
+      `<div class="message">${msg}</div>` +
+      `<div class="timestamp">${timestamp}</div>`;
+    messagesDiv.appendChild(div);
+    scrollToBottom();
+  }
+
+  function playSound() {
+    const snd = document.getElementById("notifySound");
     snd.pause();
     snd.currentTime = 0;
-    snd.play().catch(()=>{});
-}
+    snd.play().catch(() => {});
+  }
 
-function vibratePhone() {
-    if (navigator.vibrate) navigator.vibrate([120]);
-}
+  function sendMessage() {
+    const val = msgInput.value.trim();
+    if (!val) return;
+    socketio.emit("message", { data: val });
+    msgInput.value = "";
+    msgInput.focus();
+  }
 
-// incoming message
-socketio.on("message", (data) => {
-    createMessage(data.name, data.message);
+  /* ── Events ── */
+  sendBtn.addEventListener("click", sendMessage);
 
-    if (data.name === USERNAME) return;
+  msgInput.addEventListener("keypress", (e) => {
+    if (e.key === "Enter") { e.preventDefault(); sendMessage(); }
+  });
 
-    if (mode === "sound") playSound();
-    else if (mode === "vibrate") vibratePhone();
-});
+  leaveBtn.addEventListener("click", () => {
+    window.location.href = "/logout";
+  });
 
-// send
-function sendMessage() {
-    const message = document.getElementById("message");
-    if (message.value.trim() === "") return;
+  /* ── Fullscreen (room-wrapper only) ── */
+  function updateFsIcon() {
+    const isFs = !!document.fullscreenElement;
+    fsExpand.style.display   = isFs ? "none"  : "block";
+    fsCompress.style.display = isFs ? "block" : "none";
+  }
 
-    socketio.emit("message", { data: message.value });
-    message.value = "";
-}
-
-// enter key
-document.getElementById("message").addEventListener("keypress", (e) => {
-    if (e.key === "Enter") {
-        e.preventDefault();
-        sendMessage();
+  fsBtn.addEventListener("click", () => {
+    if (!document.fullscreenElement) {
+      roomWrapper.requestFullscreen().catch(() => {});
+    } else {
+      document.exitFullscreen().catch(() => {});
     }
+  });
+
+  document.addEventListener("fullscreenchange", updateFsIcon);
+
+  /* ── Render history ── */
+  {% for msg in messages %}
+  createMessage("{{ msg.name }}", "{{ msg.message }}", "{{ msg.timestamp }}");
+  {% endfor %}
+
 });
 </script>
-
-{% for msg in messages %}
-<script>
-createMessage("{{ msg.name }}", "{{ msg.message }}");
-</script>
-{% endfor %}
 
 {% endblock %}
