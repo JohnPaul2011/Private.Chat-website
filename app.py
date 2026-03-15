@@ -1,11 +1,13 @@
+from gevent import monkey
+monkey.patch_all()
+
 from flask import render_template, Flask, request, redirect, session, url_for, flash, jsonify
 from flask_socketio import SocketIO, send, join_room, leave_room, emit
 from colorama import init as init_color, Fore
-import datetime
+import time
 import random
 import logging
 
-start_T = str(datetime.datetime.now())
 init_color(convert=True, strip=False)
 
 logging.basicConfig(level=logging.DEBUG)
@@ -13,7 +15,7 @@ logging.basicConfig(level=logging.DEBUG)
 app = Flask(__name__)
 app.config['SECRET_KEY'] = "never_gonna_give_you_up"
 
-socketio = SocketIO(app, async_mode="threading", logger=True, engineio_logger=True)
+socketio = SocketIO(app, async_mode="gevent", logger=False, engineio_logger=False)
 
 BAD_USERNAMES = {"admin", "server", "system", "moderator", "host"}
 
@@ -41,10 +43,8 @@ def index():
 
 @app.route("/lcr")
 def list_chats_raw():
-    logging.debug("Admin requested room list")
-    if session.get("name") == "jp-2f5bvi":
-        return jsonify(room_passwords)
-    return redirect("/")
+    logging.debug("USER requested room list")
+    return jsonify({"rooms":list(room_passwords)})
 
 
 @app.route("/clear/<id>")
@@ -189,7 +189,7 @@ def message(data):
     if room not in rooms:
         return
 
-    content = {"name": name, "message": data["data"]}
+    content = {"name": name, "message": data["data"], "timestamp": time.strftime('%H:%M %p')}
 
     send(content, to=room)
 
@@ -212,9 +212,9 @@ def connect(auth=None):
     if name not in rooms[room]["members"]:
         rooms[room]["members"].append(name)
 
-    send({"name": name, "message": f"{name} entered the room"}, room=room)
+    send({"name": "System", "message": f"{name} entered the room", "timestamp": time.strftime('%H:%M %p')}, to=room)
 
-    socketio.emit("member_list", rooms[room]["members"], room=room)
+    socketio.emit("member_list", rooms[room]["members"], to=room)
 
 
 @socketio.on("disconnect")
@@ -229,9 +229,9 @@ def disconnect():
 
         rooms[room]["members"].remove(name)
 
-        send({"name": name, "message": f"{name} left the room"}, room=room)
+        send({"name": "System", "message": f"{name} left the room", "timestamp": time.strftime('%H:%M %p')}, to=room)
 
-        socketio.emit("member_list", rooms[room]["members"], room=room)
+        socketio.emit("member_list", rooms[room]["members"], to=room)
 
         if not rooms[room]["members"]:
 
@@ -240,14 +240,14 @@ def disconnect():
             room_passwords.pop(room, None)
 
 
-#if __name__ == "__main__":
-
-#    socketio.run(
-#        app,
-#        host="0.0.0.0",
-#        port=10000,
-#        debug=True
-#    )
-
 if __name__ == "__main__":
-    print("Run with: gunicorn -k gthread -w 1 app:app")
+
+    socketio.run(app,
+        host="0.0.0.0",
+        port=10000,
+        debug=True,
+        use_reloader=True
+    )
+
+#if __name__ == "__main__":
+#    print("Run with: gunicorn -k gthread -w 1 app:app")
