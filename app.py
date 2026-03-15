@@ -1,6 +1,3 @@
-from gevent import monkey
-monkey.patch_all()
-
 from flask import render_template, Flask, request, redirect, session, url_for, flash, jsonify
 from flask_socketio import SocketIO, send, join_room, leave_room, emit
 from colorama import init as init_color, Fore
@@ -15,7 +12,7 @@ logging.basicConfig(level=logging.DEBUG)
 app = Flask(__name__)
 app.config['SECRET_KEY'] = "never_gonna_give_you_up"
 
-socketio = SocketIO(app, async_mode="gevent", logger=False, engineio_logger=False)
+socketio = SocketIO(app, async_mode="threading", logger=False, engineio_logger=False)
 
 BAD_USERNAMES = {"admin", "server", "system", "moderator", "host"}
 
@@ -23,8 +20,6 @@ pages = {"home": "index.html"}
 
 rooms = {}
 room_passwords = {}
-
-
 def username_taken(name):
     n = name.lower()
     for room in rooms.values():
@@ -32,21 +27,15 @@ def username_taken(name):
             if user.lower() == n:
                 return True
     return False
-
-
 @app.route("/")
 def index():
     logging.debug("Index page loaded")
     username = session.get("name", "Guest")
     return render_template(pages["home"], username=username)
-
-
 @app.route("/lcr")
 def list_chats_raw():
     logging.debug("USER requested room list")
     return jsonify({"rooms":list(room_passwords)})
-
-
 @app.route("/clear/<id>")
 def delete_chat(id):
     logging.debug(f"Clearing chat {id}")
@@ -55,8 +44,6 @@ def delete_chat(id):
         if room:
             room["messages"] = []
     return redirect("/")
-
-
 @app.route("/join", methods=["GET", "POST"])
 def join():
     if request.method == "POST":
@@ -95,8 +82,6 @@ def join():
         return redirect(url_for("room"))
 
     return render_template("join.html", username=session.get("name", "Guest"))
-
-
 @app.route("/create", methods=["GET", "POST"])
 def create():
     if request.method == "POST":
@@ -135,16 +120,12 @@ def create():
         return redirect(url_for("room"))
 
     return render_template("create.html", username=session.get("name", "Guest"))
-
-
 def generate_unique_code(length):
 
     while True:
         code = "".join(random.choices("0123456789", k=length))
         if code not in rooms:
             return code
-
-
 @app.route("/room")
 def room():
 
@@ -161,8 +142,6 @@ def room():
         messages=rooms[room]["messages"],
         username=session["name"]
     )
-
-
 @app.route("/logout")
 def logout():
 
@@ -173,8 +152,6 @@ def logout():
     flash("You have been logged out.", "info")
 
     return redirect(url_for("index"))
-
-
 @socketio.on("message")
 def message(data):
 
@@ -194,8 +171,6 @@ def message(data):
     send(content, to=room)
 
     rooms[room]["messages"].append(content)
-
-
 @socketio.on("connect")
 def connect(auth=None):
 
@@ -212,11 +187,9 @@ def connect(auth=None):
     if name not in rooms[room]["members"]:
         rooms[room]["members"].append(name)
 
-    send({"name": "System", "message": f"{name} entered the room", "timestamp": time.strftime('%H:%M %p')}, to=room)
+    send({"name": "System", "message": f"{name} entered the room", "timestamp": time.strftime('%H:%M %p')}, room=room)
 
-    socketio.emit("member_list", rooms[room]["members"], to=room)
-
-
+    socketio.emit("member_list", rooms[room]["members"], room=room)
 @socketio.on("disconnect")
 def disconnect():
 
@@ -229,17 +202,15 @@ def disconnect():
 
         rooms[room]["members"].remove(name)
 
-        send({"name": "System", "message": f"{name} left the room", "timestamp": time.strftime('%H:%M %p')}, to=room)
+        send({"name": "System", "message": f"{name} left the room", "timestamp": time.strftime('%H:%M %p')}, room=room)
 
-        socketio.emit("member_list", rooms[room]["members"], to=room)
+        socketio.emit("member_list", rooms[room]["members"], room=room)
 
         if not rooms[room]["members"]:
 
             del rooms[room]
 
             room_passwords.pop(room, None)
-
-
 if __name__ == "__main__":
 
     socketio.run(app,
