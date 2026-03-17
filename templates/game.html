@@ -1,0 +1,576 @@
+{% extends "index.html" %}
+{% block main %}
+
+<div class="gh-page">
+
+  <!-- ── LOBBY ── -->
+  <div id="view-lobby" class="gh-view">
+    <div class="gh-lobby-card">
+      <div class="gh-logo">🎮</div>
+      <h2 class="gh-title">Game Hub</h2>
+      <p class="gh-sub">Play multiplayer games with your friends</p>
+
+      <!-- Username (pre-filled if in session) -->
+      <div class="gh-field-group">
+        <label class="gh-label">Your username</label>
+        <input id="gh-username" class="gh-input" placeholder="Enter a name…"
+               value="{{ username }}" autocomplete="off" maxlength="20">
+      </div>
+
+      <!-- Create section -->
+      <div class="gh-section-label">Create a game</div>
+      <div class="gh-game-grid">
+        <button class="gh-game-card" data-game="tictactoe" data-diff="">
+          <div class="gh-gc-icon">⭕</div>
+          <div class="gh-gc-name">Tic Tac Toe</div>
+        </button>
+        <button class="gh-game-card" data-game="2048" data-diff="">
+          <div class="gh-gc-icon">🔢</div>
+          <div class="gh-gc-name">2048</div>
+        </button>
+        <div class="gh-poison-card">
+          <div class="gh-gc-icon">☠️</div>
+          <div class="gh-gc-name">Don't Drink the Poison</div>
+          <div class="gh-diff-row">
+            <button class="gh-diff-btn" data-game="poison" data-diff="easy">Easy<span>6 cups</span></button>
+            <button class="gh-diff-btn" data-game="poison" data-diff="medium">Medium<span>4 cups</span></button>
+            <button class="gh-diff-btn" data-game="poison" data-diff="hard">Hard<span>3 cups</span></button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Join section -->
+      <div class="gh-section-label" style="margin-top:20px">Join with a code</div>
+      <div class="gh-join-row">
+        <input id="gh-join-code" class="gh-input gh-code-input" placeholder="XXXXXX"
+               maxlength="6" autocomplete="off"
+               value="{{ invite_code }}" style="text-transform:uppercase;letter-spacing:3px">
+        <button id="gh-join-btn" class="gh-btn">Join</button>
+      </div>
+      <div id="gh-error" class="gh-error hidden"></div>
+    </div>
+  </div>
+
+  <!-- ── WAITING ── -->
+  <div id="view-waiting" class="gh-view hidden">
+    <div class="gh-lobby-card">
+      <div id="wt-game-icon" class="gh-logo"></div>
+      <h2 id="wt-game-name" class="gh-title"></h2>
+      <p class="gh-sub">Share the code or invite link with friends</p>
+
+      <div class="gh-code-display">
+        <div id="wt-code" class="gh-big-code"></div>
+        <button id="wt-copy-code" class="gh-copy-btn" title="Copy code">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" width="16"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+          Copy Code
+        </button>
+        <button id="wt-copy-link" class="gh-copy-btn" title="Copy invite link">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" width="16"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
+          Copy Invite Link
+        </button>
+      </div>
+
+      <div class="gh-section-label">Players in lobby</div>
+      <div id="wt-players" class="gh-player-list"></div>
+      <div id="wt-min-note" class="gh-sub" style="margin-top:8px;font-size:12px"></div>
+
+      <div class="gh-wt-actions">
+        <button id="wt-start-btn" class="gh-btn gh-btn-green hidden">▶ Start Game</button>
+        <button id="wt-leave-btn" class="gh-btn gh-btn-outline">Leave</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── PLAYING ── -->
+  <div id="view-playing" class="gh-view hidden">
+    <div class="gp-header">
+      <div>
+        <div id="gp-title" class="gp-title"></div>
+        <div id="gp-round" class="gp-round"></div>
+      </div>
+      <button id="gp-leave-btn" class="gh-btn gh-btn-outline" style="font-size:13px;padding:6px 14px">Leave</button>
+    </div>
+    <!-- Simple score bar shown always -->
+    <div id="gp-scorebar" class="gp-scorebar"></div>
+    <!-- Full leaderboard table shown below board -->
+    <div id="gp-scores" class="gp-scores"></div>
+    <div id="gp-board" class="gp-board"></div>
+    <div id="gp-msg" class="gp-msg"></div>
+    <!-- Vote row: both players must press Play Again -->
+    <div id="gp-vote-row" class="gp-vote-row hidden">
+      <div class="gp-vote-label" id="gp-vote-label">Round over!</div>
+      <button id="gp-vote-btn" class="gh-btn gh-btn-green">▶ Play Again</button>
+      <div class="gp-vote-status" id="gp-vote-status"></div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+document.addEventListener("DOMContentLoaded", function () {
+
+const socketio = io({ transports: ["polling"] });
+
+// ── State ────────────────────────────────────────────────────────────────
+let myUsername = "{{ username }}".trim();
+let gameCode   = "";
+let gameType   = "";
+let gameDiff   = "";
+let gameState  = null;
+let gamePlayers= [];
+let gameScores = {};
+let gameHost   = "";
+let mySymbol   = null;  // tictactoe
+
+// Pre-fill invite code if URL has ?code=
+const urlCode = new URLSearchParams(location.search).get("code") || "";
+if (urlCode) document.getElementById("gh-join-code").value = urlCode.toUpperCase();
+
+// ── Views ────────────────────────────────────────────────────────────────
+const views = ["lobby","waiting","playing"];
+function showView(name) {
+  views.forEach(v => document.getElementById(`view-${v}`).classList.add("hidden"));
+  document.getElementById(`view-${name}`).classList.remove("hidden");
+}
+
+// ── Lobby: create ────────────────────────────────────────────────────────
+document.querySelectorAll(".gh-game-card, .gh-diff-btn").forEach(btn => {
+  btn.addEventListener("click", () => {
+    const un = document.getElementById("gh-username").value.trim();
+    if (!un) { showError("Enter your username first"); return; }
+    myUsername = un;
+    socketio.emit("g_create", { username: un, game: btn.dataset.game, diff: btn.dataset.diff||"easy" });
+  });
+});
+
+// ── Lobby: join ──────────────────────────────────────────────────────────
+document.getElementById("gh-join-btn").addEventListener("click", doJoin);
+document.getElementById("gh-join-code").addEventListener("keypress", e => { if(e.key==="Enter") doJoin(); });
+function doJoin() {
+  const un   = document.getElementById("gh-username").value.trim();
+  const code = document.getElementById("gh-join-code").value.trim().toUpperCase();
+  if (!un)   { showError("Enter your username first"); return; }
+  if (!code) { showError("Enter a game code"); return; }
+  myUsername = un;
+  socketio.emit("g_join", { username: un, code });
+}
+
+function showError(msg) {
+  const el = document.getElementById("gh-error");
+  el.textContent = msg; el.classList.remove("hidden");
+  setTimeout(() => el.classList.add("hidden"), 3500);
+}
+
+// ── Socket: created ──────────────────────────────────────────────────────
+socketio.on("g_created", data => {
+  gameCode=data.code; gameType=data.type; gameDiff=data.diff;
+  gameState=data.state; gamePlayers=data.players; gameScores=data.scores; gameHost=data.host;
+  initWaiting();
+});
+
+socketio.on("g_joined", data => {
+  gameCode=data.code; gameType=data.type; gameDiff=data.diff;
+  gameState=data.state; gamePlayers=data.players; gameScores=data.scores; gameHost=data.host;
+  // Always go to waiting room — host must press Start for everyone
+  initWaiting();
+});
+
+socketio.on("g_error", data => showError(data.msg));
+
+// ── Waiting room ─────────────────────────────────────────────────────────
+function initWaiting() {
+  const icons = { tictactoe:"⭕", "2048":"🔢", poison:"☠️" };
+  const names = { tictactoe:"Tic Tac Toe", "2048":"2048", poison:"Don't Drink the Poison" };
+  document.getElementById("wt-game-icon").textContent = icons[gameType]||"🎮";
+  document.getElementById("wt-game-name").textContent = names[gameType]||gameType;
+  document.getElementById("wt-code").textContent = gameCode;
+  const minNote = { tictactoe:"Needs 2 players", "2048":"Any number of players", poison:"Needs 2+ players" };
+  document.getElementById("wt-min-note").textContent = minNote[gameType]||"";
+  renderWaitingPlayers();
+  showView("waiting");
+}
+
+function renderWaitingPlayers() {
+  const el = document.getElementById("wt-players");
+  el.innerHTML = gamePlayers.map(p =>
+    `<div class="gh-player-pill${p===myUsername?" mine":""}">${p==="myUsername"?p:p}${p===gameHost?" 👑":""}</div>`
+  ).join("");
+  const startBtn = document.getElementById("wt-start-btn");
+  const canStart = (gameType==="tictactoe" && gamePlayers.length>=2)
+                || (gameType==="2048"      && gamePlayers.length>=1)
+                || (gameType==="poison"    && gamePlayers.length>=2);
+  if (myUsername===gameHost && canStart)
+    startBtn.classList.remove("hidden");
+  else
+    startBtn.classList.add("hidden");
+}
+
+socketio.on("g_player_joined", data => {
+  gamePlayers=data.players; gameState=data.state; gameScores=data.scores;
+  renderWaitingPlayers();
+});
+
+socketio.on("g_player_left", data => {
+  gamePlayers=data.players;
+  renderWaitingPlayers();
+});
+
+// Copy buttons
+document.getElementById("wt-copy-code").addEventListener("click", () => {
+  navigator.clipboard?.writeText(gameCode).then(()=>flash("Code copied!"));
+});
+document.getElementById("wt-copy-link").addEventListener("click", () => {
+  const url = `${location.origin}/games?code=${gameCode}`;
+  navigator.clipboard?.writeText(url).then(()=>flash("Invite link copied!"));
+});
+function flash(msg) {
+  const t=document.createElement("div"); t.className="gh-toast"; t.textContent=msg;
+  document.body.appendChild(t); setTimeout(()=>t.remove(),2000);
+}
+
+// Start (host only) — server broadcasts g_started to everyone including host
+document.getElementById("wt-start-btn").addEventListener("click", () => {
+  socketio.emit("g_start", { code: gameCode });
+});
+
+// Leave waiting
+document.getElementById("wt-leave-btn").addEventListener("click", leaveGame);
+
+// ── Playing ──────────────────────────────────────────────────────────────
+document.getElementById("gp-leave-btn").addEventListener("click", leaveGame);
+
+function leaveGame() {
+  socketio.emit("g_leave", { code: gameCode, username: myUsername });
+  gameCode=""; gameType=""; gameState=null; gamePlayers=[]; gameScores={};
+  document.getElementById("gp-restart-row").classList.add("hidden");
+  showView("lobby");
+}
+
+socketio.on("g_state", data => {
+  if (data.player===myUsername) return; // own move, already rendered
+  gameState=data.state; gameScores=data.scores;
+  renderGame();
+});
+
+// Host fires g_start → server broadcasts g_started → everyone transitions simultaneously
+socketio.on("g_started", data => {
+  gameState=data.state; gameScores=data.scores;
+  gameType=data.type; gameDiff=data.diff;
+  assignSymbol();
+  showView("playing");
+  renderGame();
+});
+
+// ── Vote state ──────────────────────────────────────────
+let voteCount = 0, totalPlayers = 0, myVoted = false;
+
+function showVoteRow(label) {
+  voteCount = 0; myVoted = false;
+  totalPlayers = gamePlayers.length;
+  const row = document.getElementById("gp-vote-row");
+  document.getElementById("gp-vote-label").textContent = label;
+  document.getElementById("gp-vote-status").textContent = "";
+  document.getElementById("gp-vote-btn").disabled = false;
+  document.getElementById("gp-vote-btn").textContent = "▶ Play Again";
+  row.classList.remove("hidden");
+}
+
+function hideVoteRow() {
+  document.getElementById("gp-vote-row").classList.add("hidden");
+  myVoted = false; voteCount = 0;
+}
+
+socketio.on("g_result", data => {
+  gameScores = data.scores;
+  renderScores();
+  showResult(data.winner);
+  showVoteRow("Round over — vote to play again!");
+});
+
+socketio.on("g_vote_update", data => {
+  voteCount = data.count; totalPlayers = data.total;
+  document.getElementById("gp-vote-status").textContent =
+    `${voteCount} / ${totalPlayers} ready`;
+});
+
+socketio.on("g_restart", data => {
+  gameState = data.state; gameScores = data.scores;
+  assignSymbol();
+  hideVoteRow();
+  document.getElementById("gp-msg").textContent = "";
+  renderGame();
+  renderScores();
+});
+
+socketio.on("g_poison_result", data => {
+  gameState = data.state; gameScores = data.scores;
+  renderPoisonGame(data);
+  if (data.state.gameOver) showVoteRow("Game over — vote to play again!");
+});
+
+document.getElementById("gp-vote-btn").addEventListener("click", () => {
+  if (myVoted) return;
+  myVoted = true;
+  document.getElementById("gp-vote-btn").disabled = true;
+  document.getElementById("gp-vote-btn").textContent = "✓ Voted";
+  socketio.emit("g_vote", { code: gameCode });
+});
+
+// ── Helpers ──────────────────────────────────────────────────────────────
+function assignSymbol() {
+  if (gameType!=="tictactoe") return;
+  if (gameState.players.X===myUsername) mySymbol="X";
+  else if (gameState.players.O===myUsername) mySymbol="O";
+  else mySymbol=null;
+}
+
+function renderGame() {
+  if (gameType==="tictactoe") renderTTT();
+  else if (gameType==="2048") render2048();
+  else renderPoison();
+}
+
+function totalScore(s) { return (s.wins * 3) + (s.draws * 1); }
+
+function renderScores() {
+  const entries = Object.entries(gameScores);
+  if (!entries.length) {
+    document.getElementById("gp-scores").innerHTML = "";
+    document.getElementById("gp-scorebar").innerHTML = "";
+    return;
+  }
+  const sorted = [...entries].sort((a,b) => totalScore(b[1]) - totalScore(a[1]));
+
+  // ── Simple scorebar ──
+  const barEl = document.getElementById("gp-scorebar");
+  if (entries.length === 2) {
+    const [[pA, sA], [pB, sB]] = sorted;
+    const ptA = totalScore(sA), ptB = totalScore(sB);
+    barEl.innerHTML = `
+      <div class="gsb-side${pA===myUsername?" gsb-you":""}">
+        <span class="gsb-name">${pA===myUsername?"You":pA}</span>
+        <span class="gsb-pts">${ptA}</span>
+      </div>
+      <div class="gsb-divider">pts</div>
+      <div class="gsb-side gsb-right${pB===myUsername?" gsb-you":""}">
+        <span class="gsb-pts">${ptB}</span>
+        <span class="gsb-name">${pB===myUsername?"You":pB}</span>
+      </div>`;
+  } else {
+    // 3+ players: compact chips
+    barEl.innerHTML = sorted.map(([p,s]) =>
+      `<div class="gsb-chip${p===myUsername?" gsb-you":""}">
+        <span class="gsb-chip-name">${p===myUsername?"You":p}</span>
+        <span class="gsb-chip-pts">${totalScore(s)}</span>
+      </div>`
+    ).join('<span class="gsb-chip-sep">·</span>');
+  }
+
+  // ── Leaderboard table ──
+  document.getElementById("gp-scores").innerHTML = `
+    <div class="gp-score-table">
+      <div class="gp-score-table-header">
+        <span>Player</span><span>Pts</span><span>W</span><span>D</span><span>L</span>
+      </div>
+      ${sorted.map(([p,s],i) => `
+        <div class="gp-score-table-row${p===myUsername?" mine":""}${i===0?" leader":""}">
+          <span class="gp-sc-name">${i===0?"🥇 ":""}${p===myUsername?"You":p}</span>
+          <span class="gp-sc-pts">${totalScore(s)}</span>
+          <span class="gp-sc-wins">${s.wins}</span>
+          <span class="gp-sc-draws">${s.draws}</span>
+          <span class="gp-sc-losses">${s.losses}</span>
+        </div>
+      `).join("")}
+      <div class="gp-score-legend">3 pts · win &nbsp;|&nbsp; 1 pt · draw</div>
+    </div>`;
+}
+
+function showResult(winner) {
+  const msg = document.getElementById("gp-msg");
+  if (winner==="draw") msg.textContent="It's a draw! 🤝";
+  else if (winner===myUsername) msg.textContent="You win! 🎉";
+  else if (winner) msg.textContent=`${winner} wins! 🏆`;
+  else msg.textContent="Game over!";
+}
+
+// ── Tic Tac Toe ──────────────────────────────────────────────────────────
+function renderTTT() {
+  const st = gameState;
+  const px = st.players.X||"?", po = st.players.O||"Waiting…";
+  document.getElementById("gp-title").textContent="⭕ Tic Tac Toe";
+  document.getElementById("gp-round").textContent=`Round ${st.round||1}`;
+  renderScores();
+  const canPlay = !st.winner && mySymbol && mySymbol===st.turn;
+  document.getElementById("gp-board").innerHTML=`
+    <div class="ttt-scoreboard">
+      <div class="ttt-player ${st.turn==="X"&&!st.winner?"active":""}">
+        <span class="ttt-sym x-sym">✕</span>
+        <span class="ttt-pname">${px}${px===myUsername?" (You)":""}</span>
+      </div>
+      <span class="ttt-vs">VS</span>
+      <div class="ttt-player ${st.turn==="O"&&!st.winner?"active":""}">
+        <span class="ttt-sym o-sym">○</span>
+        <span class="ttt-pname">${po}${po===myUsername?" (You)":""}</span>
+      </div>
+    </div>
+    <div class="ttt-board">
+      ${st.board.map((c,i)=>`<div class="ttt-cell${c?" taken":""}${canPlay&&!c?" playable":""}${c==="X"?" x-cell":c==="O"?" o-cell":""}" data-i="${i}">${c||""}</div>`).join("")}
+    </div>`;
+  document.getElementById("gp-board").querySelectorAll(".ttt-cell.playable").forEach(el=>
+    el.addEventListener("click",()=>tttMove(+el.dataset.i)));
+  if (!st.winner) {
+    document.getElementById("gp-msg").textContent =
+      !st.players.O ? "Waiting for opponent…" : mySymbol===st.turn ? "Your turn!" : `${st.players[st.turn]}'s turn`;
+  }
+}
+
+function tttMove(i) {
+  const st = gameState;
+  if (st.winner||st.board[i]||mySymbol!==st.turn) return;
+  st.board[i]=st.turn;
+  const winner=tttCheckWin(st.board);
+  st.turn = st.turn==="X"?"O":"X";
+  if (winner) st.winner=winner;
+  gameState=st;
+  renderTTT();
+  socketio.emit("g_move",{code:gameCode,state:st,player:myUsername});
+  if (winner) {
+    socketio.emit("g_result",{code:gameCode,winner});
+    showResult(winner);
+    if (myUsername===gameHost)
+      document.getElementById("gp-restart-row").classList.remove("hidden");
+  }
+}
+
+function tttCheckWin(b) {
+  const L=[[0,1,2],[3,4,5],[6,7,8],[0,3,6],[1,4,7],[2,5,8],[0,4,8],[2,4,6]];
+  for(const[a,c,d]of L)if(b[a]&&b[a]===b[c]&&b[a]===b[d])return b[a];
+  return b.every(c=>c!==null)?"draw":null;
+}
+
+// ── 2048 ────────────────────────────────────────────────────────────────
+let _2048kh=null, _2048sx=null, _2048sy=null;
+function render2048() {
+  const st = gameState;
+  document.getElementById("gp-title").textContent="🔢 2048";
+  document.getElementById("gp-round").textContent=`Score: ${st.score}`;
+  renderScores();
+  const curP = (st.players||[])[st.turnIndex%((st.players||[]).length||1)];
+  const myTurn = curP===myUsername;
+  const pHTML  = (st.players||[]).map((p,i)=>{
+    const act=i===st.turnIndex%(st.players.length||1);
+    return `<span class="p2k-player${act?" p2k-active":""}">${p===myUsername?"You":p}${act?" ▶":""}</span>`;
+  }).join("");
+  document.getElementById("gp-board").innerHTML=`
+    <div class="g2k-players-row">${pHTML}</div>
+    <div class="g2k-board" id="the2048">
+      ${(st.board||[]).map(v=>`<div class="g2k-cell${v?" g2k-filled":""}" style="${tile2048(v)}">${v||""}</div>`).join("")}
+    </div>
+    <div class="g2k-hint">${myTurn?"⬆⬇⬅➡ Arrow keys or swipe":`${curP||"?"}'s turn`}</div>`;
+  document.getElementById("gp-msg").textContent="";
+
+  if(_2048kh) document.removeEventListener("keydown",_2048kh);
+  if(myTurn){
+    _2048kh=e=>{const m={ArrowLeft:"left",ArrowRight:"right",ArrowUp:"up",ArrowDown:"down"};if(m[e.key]){e.preventDefault();do2048(m[e.key]);}};
+    document.addEventListener("keydown",_2048kh);
+    const bd=document.getElementById("the2048");
+    bd.addEventListener("touchstart",e=>{_2048sx=e.touches[0].clientX;_2048sy=e.touches[0].clientY;},{passive:true,once:true});
+    bd.addEventListener("touchend",e=>{
+      if(_2048sx==null)return;
+      const dx=e.changedTouches[0].clientX-_2048sx,dy=e.changedTouches[0].clientY-_2048sy;
+      if(Math.abs(dx)<20&&Math.abs(dy)<20)return;
+      do2048(Math.abs(dx)>Math.abs(dy)?(dx>0?"right":"left"):(dy>0?"down":"up"));
+      _2048sx=_2048sy=null;
+    },{once:true});
+  }
+}
+
+function tile2048(v){
+  const bg={0:"transparent",2:"#eee4da",4:"#ede0c8",8:"#f2b179",16:"#f59563",32:"#f67c5f",
+            64:"#f65e3b",128:"#edcf72",256:"#edcc61",512:"#edc850",1024:"#edc53f",2048:"#edc22e"};
+  return `background:${bg[v]||"#3c3a32"};color:${v>4?"#fff":"#776e65"}`;
+}
+
+function do2048(dir){
+  const st={...gameState,board:[...gameState.board]};
+  let g=[];for(let r=0;r<4;r++)g.push(st.board.slice(r*4,r*4+4));
+  let moved=false;
+  function slide(row){let n=row.filter(v=>v!==0);for(let i=0;i<n.length-1;i++)if(n[i]===n[i+1]){n[i]*=2;st.score+=n[i];n.splice(i+1,1);}while(n.length<4)n.push(0);return n;}
+  if(dir==="left"||dir==="right"){
+    for(let r=0;r<4;r++){const rev=dir==="right";let row=rev?[...g[r]].reverse():g[r];const n=slide(row);if(rev)n.reverse();if(n.some((v,i)=>v!==g[r][i]))moved=true;g[r]=n;}
+  }else{
+    for(let c=0;c<4;c++){let col=[0,1,2,3].map(r=>g[r][c]);if(dir==="down")col.reverse();const n=slide(col);if(dir==="down")n.reverse();n.forEach((v,r)=>{if(v!==g[r][c])moved=true;g[r][c]=v;});}
+  }
+  if(!moved)return;
+  st.board=g.flat();
+  // add tile
+  const empty=st.board.map((v,i)=>v===0?i:-1).filter(i=>i>=0);
+  if(empty.length)st.board[empty[Math.floor(Math.random()*empty.length)]]=Math.random()<.9?2:4;
+  st.turnIndex=(st.turnIndex||0)+1;
+  gameState=st;
+  render2048();
+  socketio.emit("g_move",{code:gameCode,state:st,player:myUsername});
+}
+
+// ── Poison ───────────────────────────────────────────────────────────────
+function renderPoison(lastResult) {
+  const st=gameState;
+  document.getElementById("gp-title").textContent="☠️ Don't Drink the Poison";
+  document.getElementById("gp-round").textContent=`Round ${st.roundNum}`;
+  renderScores();
+  renderPoisonGame(lastResult);
+}
+
+function renderPoisonGame(data) {
+  const st=gameState;
+  const lastResult=data||null;
+  const curPicker=st.alive[st.pickerIndex%(st.alive.length||1)];
+  const myTurn=curPicker===myUsername&&!st.gameOver;
+
+  const cups=Array.from({length:st.numCups},(_,i)=>{
+    const picked=st.picked.includes(i);
+    const isPoison=lastResult?.cup===i&&lastResult?.poisoned;
+    const isSafe=lastResult?.cup===i&&!lastResult?.poisoned;
+    const playable=myTurn&&!picked&&!st.gameOver;
+    const emoji=isPoison?"☠️":isSafe?"✅":picked?"✓":"🥤";
+    return `<button class="pcup${picked?" pcup-picked":""}${isPoison?" pcup-poison":""}${isSafe?" pcup-safe":""}${playable?" pcup-play":""}"
+      data-cup="${i}" ${!playable?"disabled":""}><span class="pcup-emoji">${emoji}</span><span class="pcup-num">${i+1}</span></button>`;
+  }).join("");
+
+  const players=[
+    ...st.alive.map(p=>`<span class="pp alive${p===curPicker?" pp-cur":""}">${p===myUsername?"You":p}${p===curPicker?" 👈":""}</span>`),
+    ...st.eliminated.map(p=>`<span class="pp dead">${p===myUsername?"You":p} ☠️</span>`)
+  ].join("");
+
+  let statusText="";
+  if(st.gameOver)statusText=st.winner?`${st.winner===myUsername?"You win":st.winner+" wins"}! 🏆`:"Game over!";
+  else if(lastResult?.poisoned)statusText=`${lastResult.player===myUsername?"You":lastResult.player} drank the poison! ☠️ New round!`;
+  else if(lastResult&&!lastResult.poisoned)statusText=`${lastResult.player===myUsername?"You":lastResult.player} picked safely ✅`;
+  else statusText=myTurn?"Your turn — pick a cup!":`${curPicker}'s turn to pick…`;
+
+  const diff=gameDiff||st.difficulty||"easy";
+  document.getElementById("gp-board").innerHTML=`
+    <div class="poison-header">
+      <span class="poison-round">Round ${st.roundNum}</span>
+      <span class="poison-diff-badge ${diff}">${diff}</span>
+    </div>
+    <div class="poison-cups">${cups}</div>
+    <div class="poison-status">${statusText}</div>
+    <div class="poison-players">${players}</div>`;
+  document.getElementById("gp-msg").textContent="";
+
+  document.querySelectorAll(".pcup-play").forEach(b=>
+    b.addEventListener("click",()=>socketio.emit("g_poison_pick",{code:gameCode,cup:+b.dataset.cup,username:myUsername})));
+}
+
+// Auto-join from URL code
+if (urlCode && "{{ username }}".trim()) {
+  setTimeout(() => {
+    document.getElementById("gh-join-btn").click();
+  }, 300);
+}
+
+}); // DOMContentLoaded
+</script>
+
+{% endblock %}

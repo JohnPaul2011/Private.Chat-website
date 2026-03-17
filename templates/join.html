@@ -1,38 +1,45 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="light">
 <head>
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>Private.chat — Join</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}"/>
   <script>
-    setTimeout(() => {
-      document.querySelectorAll(".flash-msg").forEach(m => {
-        m.classList.add("hide");
-        setTimeout(() => m.remove(), 800);
-      });
-    }, 3000);
+    (function(){
+      const saved=localStorage.getItem("theme");
+      const sys=window.matchMedia("(prefers-color-scheme: dark)").matches;
+      document.documentElement.setAttribute("data-theme", saved||(sys?"dark":"light"));
+    })();
+    window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change",(e)=>{
+      if(!localStorage.getItem("theme")) document.documentElement.setAttribute("data-theme",e.matches?"dark":"light");
+    });
+    setTimeout(()=>{
+      document.querySelectorAll(".flash-msg").forEach(m=>{m.classList.add("hide");setTimeout(()=>m.remove(),800);});
+    },3000);
   </script>
 </head>
 <body>
-
   {% with messages = get_flashed_messages(with_categories=true) %}
-  {% if messages %}
-    {% for category, message in messages %}
-    <div class="flash-msg flash-{{ category }}">{{ message }}</div>
-    {% endfor %}
-  {% endif %}
-  {% endwith %}
+  {% if messages %}{% for category, message in messages %}
+  <div class="flash-msg flash-{{ category }}">{{ message }}</div>
+  {% endfor %}{% endif %}{% endwith %}
 
   <div class="container">
     <h2>Join a Room</h2>
     <form method="POST">
       <input name="name" placeholder="Username" value="{{ username }}" required autocomplete="off">
-      <input name="code" placeholder="Room ID" value="{{ code }}" required>
+      <input name="code" placeholder="Room ID" value="{{ code }}" required id="code-input">
       <input name="password" placeholder="Room password (if any)" autocomplete="off">
       <button type="submit">Join</button>
     </form>
+    <p><a href="/create">Create a room instead →</a></p>
   </div>
 
+  <script>
+    // Pre-fill code from URL ?code= param (invite links)
+    const urlCode = new URLSearchParams(location.search).get("code");
+    if (urlCode) document.getElementById("code-input").value = urlCode;
+  </script>
 </body>
 </html>

@@ -3,48 +3,82 @@
 
 <div class="room-wrapper">
 
-  <!-- Chat header -->
+  <!-- ── Chat header ── -->
   <div class="navbar-msg">
     <div class="navbar-left">
       <div class="room-name">{{ code }}</div>
-      <div class="navbar-msg-info" id="conn-status">connecting…</div>
+      <button id="members-btn" class="members-count-btn" title="View members">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" width="13" height="13">
+          <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/>
+          <path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>
+        </svg>
+        <span id="members-count">0</span>
+      </button>
     </div>
     <div class="navbar-actions">
-      <!-- Fullscreen toggle -->
+      <button id="mute-btn" title="Mute notifications">
+        <svg id="mute-icon-on" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/>
+          <path d="M19.07 4.93a10 10 0 0 1 0 14.14"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/>
+        </svg>
+        <svg id="mute-icon-off" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:none">
+          <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/>
+          <line x1="23" y1="9" x2="17" y2="15"/><line x1="17" y1="9" x2="23" y2="15"/>
+        </svg>
+      </button>
       <button id="fullscreen-btn" title="Fullscreen">
-        <!-- expand icon (default) -->
-        <svg id="fs-expand" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"
-             stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <svg id="fs-expand" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/>
           <line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/>
         </svg>
-        <!-- compress icon (fullscreen active) -->
-        <svg id="fs-compress" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"
-             stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
-             style="display:none">
+        <svg id="fs-compress" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:none">
           <polyline points="4 14 10 14 10 20"/><polyline points="20 10 14 10 14 4"/>
           <line x1="10" y1="14" x2="3" y2="21"/><line x1="21" y1="3" x2="14" y2="10"/>
         </svg>
       </button>
-      <!-- Leave -->
       <button id="leave-btn" title="Leave room">
-        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"
-             stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <path d="M3 5v14"/><path d="M21 12H7"/><path d="m15 18 6-6-6-6"/>
         </svg>
       </button>
     </div>
   </div>
 
-  <!-- Messages -->
+  <!-- ── Members panel ── -->
+  <div id="members-panel" class="members-panel hidden">
+    <div class="members-panel-header">Online Members</div>
+    <div id="members-list" class="members-list"></div>
+  </div>
+
+  <!-- ── Messages ── -->
   <div class="messages" id="messages"></div>
 
-  <!-- Input bar -->
+  <!-- ── Reply bar ── -->
+  <div id="reply-bar" class="reply-bar hidden">
+    <div class="reply-bar-stripe"></div>
+    <div class="reply-bar-body">
+      <span class="reply-bar-name" id="reply-bar-name"></span>
+      <span class="reply-bar-text" id="reply-bar-text"></span>
+    </div>
+    <button id="reply-cancel-btn" class="reply-cancel-btn">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" width="16" height="16">
+        <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+      </svg>
+    </button>
+  </div>
+
+  <!-- ── Input bar ── -->
   <div class="inputs">
+    <button id="mic-btn" class="input-icon-btn" title="Record voice message">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="20" height="20">
+        <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
+        <path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/>
+        <line x1="8" y1="23" x2="16" y2="23"/>
+      </svg>
+    </button>
     <input id="message" type="text" placeholder="Type a message…" autocomplete="off">
     <button id="send-btn" title="Send">
-      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="white"
-           width="20" height="20">
+      <svg viewBox="0 0 24 24" fill="white" width="20" height="20">
         <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/>
       </svg>
     </button>
@@ -57,101 +91,206 @@
 <script>
 document.addEventListener("DOMContentLoaded", function () {
 
-  const USERNAME      = "{{ username }}";
-  const messagesDiv   = document.getElementById("messages");
-  const msgInput      = document.getElementById("message");
-  const sendBtn       = document.getElementById("send-btn");
-  const leaveBtn      = document.getElementById("leave-btn");
-  const status        = document.getElementById("conn-status");
-  const roomWrapper   = document.querySelector(".room-wrapper");
-  const fsBtn         = document.getElementById("fullscreen-btn");
-  const fsExpand      = document.getElementById("fs-expand");
-  const fsCompress    = document.getElementById("fs-compress");
+const USERNAME    = "{{ username }}";
+const messagesDiv = document.getElementById("messages");
+const msgInput    = document.getElementById("message");
+const sendBtn     = document.getElementById("send-btn");
+const leaveBtn    = document.getElementById("leave-btn");
+const status      = document.getElementById("conn-status");  // doesn't exist but safe
+const roomWrapper = document.querySelector(".room-wrapper");
 
-  /* ── Socket ── */
-  const socketio = io({ transports: ["websocket", "polling"] });
+// ── Socket ─────────────────────────────────────────────────────────────
+const socketio = io({ transports: ["polling"] });
 
-  socketio.on("connect", () => {
-    status.textContent = "online";
-    status.style.color = "";
-    status.style.animation = "statusPulse 1.5s ease 3";
-  });
-
-  socketio.on("disconnect", () => {
-    status.textContent = "reconnecting…";
-    status.style.color = "#e53935";
-    status.style.animation = "";
-  });
-
-  socketio.on("message", (data) => {
-    createMessage(data.name, data.message, data.timestamp);
-    if (data.name !== USERNAME) playSound();
-  });
-
-  /* ── UI helpers ── */
-  function scrollToBottom() {
-    messagesDiv.scrollTop = messagesDiv.scrollHeight;
+socketio.on("connect", () => {
+  if (document.getElementById("conn-status")) {
+    document.getElementById("conn-status").textContent = "online";
+    document.getElementById("conn-status").style.color = "";
+    document.getElementById("conn-status").style.animation = "statusPulse 1.5s ease 3";
   }
-
-  function createMessage(name, msg, timestamp) {
-    const isOwn = name === USERNAME;
-    const div = document.createElement("div");
-    div.className = isOwn ? "right-message-box" : "left-message-box";
-    div.innerHTML =
-      `<div class="username">${name}</div>` +
-      `<div class="message">${msg}</div>` +
-      `<div class="timestamp">${timestamp}</div>`;
-    messagesDiv.appendChild(div);
-    scrollToBottom();
+});
+socketio.on("disconnect", () => {
+  if (document.getElementById("conn-status")) {
+    document.getElementById("conn-status").textContent = "reconnecting…";
+    document.getElementById("conn-status").style.color = "#e53935";
   }
+});
 
-  function playSound() {
-    const snd = document.getElementById("notifySound");
-    snd.pause();
-    snd.currentTime = 0;
-    snd.play().catch(() => {});
+socketio.on("message", (data) => {
+  if (data.type === "voice") createVoiceMessage(data);
+  else createMessage(data.name, data.message, data.timestamp, data.reply_to || null);
+  if (data.name !== USERNAME && !isMuted) playSound();
+});
+
+socketio.on("member_list", (list) => {
+  document.getElementById("members-count").textContent = list.length;
+  const ml = document.getElementById("members-list");
+  ml.innerHTML = list.map(m =>
+    `<div class="members-list-item">
+      <span class="member-dot"></span>
+      <span class="member-name${m===USERNAME?" member-you":""}">${m}${m===USERNAME?" (you)":""}</span>
+    </div>`
+  ).join("");
+});
+
+// ── Mute ───────────────────────────────────────────────────────────────
+let isMuted = localStorage.getItem("chat_muted") === "1";
+const muteBtn    = document.getElementById("mute-btn");
+const muteIconOn = document.getElementById("mute-icon-on");
+const muteIconOff= document.getElementById("mute-icon-off");
+function applyMute() {
+  muteIconOn.style.display  = isMuted ? "none"  : "block";
+  muteIconOff.style.display = isMuted ? "block" : "none";
+  muteBtn.title = isMuted ? "Unmute notifications" : "Mute notifications";
+  muteBtn.style.color = isMuted ? "var(--wa-sub)" : "";
+}
+applyMute();
+muteBtn.addEventListener("click", () => {
+  isMuted = !isMuted;
+  localStorage.setItem("chat_muted", isMuted ? "1" : "0");
+  applyMute();
+});
+
+// ── Members panel ──────────────────────────────────────────────────────
+const membersBtn   = document.getElementById("members-btn");
+const membersPanel = document.getElementById("members-panel");
+membersBtn.addEventListener("click", (e) => {
+  e.stopPropagation();
+  membersPanel.classList.toggle("hidden");
+});
+document.addEventListener("click", (e) => {
+  if (!membersPanel.contains(e.target) && e.target !== membersBtn)
+    membersPanel.classList.add("hidden");
+});
+
+// ── Messages ───────────────────────────────────────────────────────────
+function scrollToBottom() { messagesDiv.scrollTop = messagesDiv.scrollHeight; }
+
+function createMessage(name, msg, timestamp, replyData) {
+  const isOwn = name === USERNAME;
+  const div = document.createElement("div");
+  div.className = isOwn ? "right-message-box" : "left-message-box";
+  let replyHtml = "";
+  if (replyData) {
+    replyHtml = `<div class="reply-quote">
+      <div class="reply-quote-name">${replyData.name}</div>
+      <div class="reply-quote-text">${replyData.message}</div>
+    </div>`;
   }
-
-  function sendMessage() {
-    const val = msgInput.value.trim();
-    if (!val) return;
-    socketio.emit("message", { data: val });
-    msgInput.value = "";
-    msgInput.focus();
-  }
-
-  /* ── Events ── */
-  sendBtn.addEventListener("click", sendMessage);
-
-  msgInput.addEventListener("keypress", (e) => {
-    if (e.key === "Enter") { e.preventDefault(); sendMessage(); }
+  div.innerHTML = `${replyHtml}
+    <div class="username">${name}</div>
+    <div class="message">${msg}</div>
+    <div class="msg-footer">
+      <span class="timestamp">${timestamp}</span>
+      <button class="reply-btn" title="Reply">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" width="13" height="13">
+          <polyline points="9 17 4 12 9 7"/><path d="M20 18v-2a4 4 0 0 0-4-4H4"/>
+        </svg>
+      </button>
+    </div>`;
+  div.querySelector(".reply-btn").addEventListener("click", (e) => {
+    e.stopPropagation(); setReplyTo({ name, message: msg });
   });
+  messagesDiv.appendChild(div);
+  scrollToBottom();
+}
 
-  leaveBtn.addEventListener("click", () => {
-    window.location.href = "/logout";
-  });
+function createVoiceMessage(data) {
+  const isOwn = data.name === USERNAME;
+  const div = document.createElement("div");
+  div.className = isOwn ? "right-message-box" : "left-message-box";
+  div.innerHTML = `
+    <div class="username">${data.name}</div>
+    <div class="voice-player">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" width="16" height="16" style="flex-shrink:0;opacity:.7">
+        <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
+        <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+      </svg>
+      <audio controls src="${data.audio}" preload="metadata"></audio>
+    </div>
+    <div class="msg-footer"><span class="timestamp">${data.timestamp}</span></div>`;
+  messagesDiv.appendChild(div);
+  scrollToBottom();
+}
 
-  /* ── Fullscreen (room-wrapper only) ── */
-  function updateFsIcon() {
-    const isFs = !!document.fullscreenElement;
-    fsExpand.style.display   = isFs ? "none"  : "block";
-    fsCompress.style.display = isFs ? "block" : "none";
-  }
+function playSound() {
+  const snd = document.getElementById("notifySound");
+  snd.pause(); snd.currentTime = 0; snd.play().catch(()=>{});
+}
 
-  fsBtn.addEventListener("click", () => {
-    if (!document.fullscreenElement) {
-      roomWrapper.requestFullscreen().catch(() => {});
-    } else {
-      document.exitFullscreen().catch(() => {});
-    }
-  });
+// ── Reply ──────────────────────────────────────────────────────────────
+let replyTo = null;
+const replyBar     = document.getElementById("reply-bar");
+const replyBarName = document.getElementById("reply-bar-name");
+const replyBarText = document.getElementById("reply-bar-text");
+function setReplyTo(data) {
+  replyTo = data;
+  replyBarName.textContent = data.name;
+  replyBarText.textContent = data.message.length>80 ? data.message.slice(0,80)+"…" : data.message;
+  replyBar.classList.remove("hidden");
+  msgInput.focus();
+}
+function cancelReply() { replyTo=null; replyBar.classList.add("hidden"); }
+document.getElementById("reply-cancel-btn").addEventListener("click", cancelReply);
 
-  document.addEventListener("fullscreenchange", updateFsIcon);
+// ── Send ───────────────────────────────────────────────────────────────
+function sendMessage() {
+  const val = msgInput.value.trim(); if(!val) return;
+  socketio.emit("message",{type:"text",data:val,reply_to:replyTo});
+  msgInput.value=""; cancelReply(); msgInput.focus();
+}
+sendBtn.addEventListener("click", sendMessage);
+msgInput.addEventListener("keypress",(e)=>{ if(e.key==="Enter"){e.preventDefault();sendMessage();} });
+leaveBtn.addEventListener("click",()=>{ window.location.href="/logout"; });
 
-  /* ── Render history ── */
-  {% for msg in messages %}
-  createMessage("{{ msg.name }}", "{{ msg.message }}", "{{ msg.timestamp }}");
-  {% endfor %}
+// ── Voice recording ────────────────────────────────────────────────────
+let mediaRecorder=null, audioChunks=[], isRecording=false, recordTimer=null, recordStart=0;
+const micBtn = document.getElementById("mic-btn");
+micBtn.addEventListener("click",()=>{ isRecording ? stopRecording() : startRecording(); });
+async function startRecording() {
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({audio:true});
+    audioChunks=[];
+    const mime=MediaRecorder.isTypeSupported("audio/webm")?"audio/webm":"audio/ogg";
+    mediaRecorder=new MediaRecorder(stream,{mimeType:mime});
+    mediaRecorder.ondataavailable=e=>{if(e.data.size>0)audioChunks.push(e.data);};
+    mediaRecorder.onstop=sendVoice;
+    mediaRecorder.start(200); isRecording=true; recordStart=Date.now();
+    micBtn.classList.add("recording");
+    recordTimer=setTimeout(stopRecording,60000);
+  } catch { alert("Microphone access denied."); }
+}
+function stopRecording() {
+  if(!isRecording)return; clearTimeout(recordTimer);
+  mediaRecorder.stop(); mediaRecorder.stream.getTracks().forEach(t=>t.stop());
+  isRecording=false; micBtn.classList.remove("recording");
+}
+function sendVoice() {
+  const blob=new Blob(audioChunks,{type:audioChunks[0]?.type||"audio/webm"});
+  const reader=new FileReader();
+  reader.onload=()=>socketio.emit("message",{type:"voice",audio:reader.result,duration:Math.round((Date.now()-recordStart)/1000)});
+  reader.readAsDataURL(blob);
+}
+
+// ── Fullscreen ─────────────────────────────────────────────────────────
+document.getElementById("fullscreen-btn").addEventListener("click",()=>{
+  if(!document.fullscreenElement) roomWrapper.requestFullscreen().catch(()=>{});
+  else document.exitFullscreen().catch(()=>{});
+});
+document.addEventListener("fullscreenchange",()=>{
+  const fs=!!document.fullscreenElement;
+  document.getElementById("fs-expand").style.display  = fs?"none":"block";
+  document.getElementById("fs-compress").style.display= fs?"block":"none";
+});
+
+// ── Render history ─────────────────────────────────────────────────────
+{% for msg in messages %}
+{% if msg.get("type") == "voice" %}
+createVoiceMessage({name:"{{ msg.name }}",audio:"{{ msg.audio }}",timestamp:"{{ msg.timestamp }}"});
+{% else %}
+createMessage("{{ msg.name }}","{{ msg.message }}","{{ msg.timestamp }}",{{ msg.reply_to | tojson if msg.reply_to else 'null' }});
+{% endif %}
+{% endfor %}
 
 });
 </script>
