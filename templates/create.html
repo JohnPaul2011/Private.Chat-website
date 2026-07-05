@@ -27,10 +27,11 @@
 
   <div class="container">
     <h2>Create a Room</h2>
-    <form method="POST">
+    <form method="POST" id="createForm">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <input name="name" placeholder="Username" value="{{ username }}" required autocomplete="off">
       <input name="code" placeholder="Room ID (leave blank to auto-generate)" value="{{ code }}" autocomplete="off">
-      <input name="password" placeholder="Room password (optional)" autocomplete="off">
+      <input name="password" placeholder="Room password (optional)" id="pwField" autocomplete="off">
       <label class="toggle-row">
         <div class="toggle-info">
           <span class="toggle-title">Save chat history</span>
@@ -45,5 +46,18 @@
     </form>
     <p><a href="/join">Join an existing room →</a></p>
   </div>
+  <script>
+  document.getElementById("createForm").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const form = e.target;
+    const pw = document.getElementById("pwField").value;
+    sessionStorage.setItem("pending_secret", pw);
+    const enc = new TextEncoder().encode(pw);
+    const hash = await crypto.subtle.digest("SHA-256", enc);
+    const hex = Array.from(new Uint8Array(hash)).map(b=>b.toString(16).padStart(2,"0")).join("");
+    document.getElementById("pwField").value = hex;
+    form.submit();
+  });
+  </script>
 </body>
 </html>

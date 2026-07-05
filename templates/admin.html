@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Private.chat — Admin Panel</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}"/>
+  <script>
+    (function(){
+      const saved=localStorage.getItem("theme");
+      const sys=window.matchMedia("(prefers-color-scheme: dark)").matches;
+      document.documentElement.setAttribute("data-theme", saved||(sys?"dark":"light"));
+    })();
+    setTimeout(()=>{
+      document.querySelectorAll(".flash-msg").forEach(m=>{m.classList.add("hide");setTimeout(()=>m.remove(),800);});
+    },3000);
+  </script>
+  <style>
+    .room-card { background:var(--panel,#222); color:var(--text,#fff); padding:14px; margin:12px 0; border-radius:10px; }
+    .room-card h3 { margin:0 0 8px 0; }
+    .member-row { display:flex; align-items:center; justify-content:space-between; gap:8px; margin:6px 0; }
+    .room-card form { display:inline-block; margin-right:8px; }
+    .kick-btn, .danger-btn { background:#e53935; color:#fff; border:none; border-radius:6px; padding:5px 10px; cursor:pointer; }
+    .kick-btn:hover, .danger-btn:hover { background:#c62828; }
+  </style>
+</head>
+<body>
+  {% with messages = get_flashed_messages(with_categories=true) %}
+  {% if messages %}{% for category, message in messages %}
+  <div class="flash-msg flash-{{ category }}">{{ message }}</div>
+  {% endfor %}{% endif %}{% endwith %}
+
+  <div class="container">
+    <h2>Admin Panel</h2>
+    <p><a href="{{ url_for('admin_logout') }}">Log out</a></p>
+
+    {% if not rooms %}
+    <p>No active rooms.</p>
+    {% endif %}
+
+    {% for code, r in rooms.items() %}
+    <div class="room-card">
+      <h3>Room {{ code }} — {{ r.message_count }} messages</h3>
+
+      {% for member in r.members %}
+      <div class="member-row">
+        <span>{{ member }}</span>
+        <form method="POST" action="{{ url_for('admin_kick', code=code, user=member) }}">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <button type="submit" class="kick-btn">Kick</button>
+        </form>
+      </div>
+      {% endfor %}
+
+      <form method="POST" action="{{ url_for('admin_kickall', code=code) }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <button type="submit" class="danger-btn">Kick All</button>
+      </form>
+      <form method="POST" action="{{ url_for('admin_clear', code=code) }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <button type="submit" class="danger-btn">Clear Messages</button>
+      </form>
+    </div>
+    {% endfor %}
+  </div>
+</body>
+</html>

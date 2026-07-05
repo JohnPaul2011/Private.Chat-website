@@ -91,7 +91,48 @@
 <script>
 document.addEventListener("DOMContentLoaded", function () {
 
-const USERNAME    = "{{ username }}";
+const USERNAME    = {{ username | tojson }};
+const ROOM_CODE   = {{ code | tojson }};
+let ROOM_SECRET   = sessionStorage.getItem("secret:" + ROOM_CODE);
+if (!ROOM_SECRET) {
+  ROOM_SECRET = sessionStorage.getItem("pending_secret") || "";
+  sessionStorage.setItem("secret:" + ROOM_CODE, ROOM_SECRET);
+}
+sessionStorage.removeItem("pending_secret");
+
+// ── E2E encryption (AES-GCM 256, key derived client-side; server only ever relays ciphertext) ──
+let cryptoKey = null;
+async function deriveKey() {
+  const enc = new TextEncoder();
+  const baseKey = await crypto.subtle.importKey(
+    "raw", enc.encode(ROOM_SECRET || "no-password-" + ROOM_CODE),
+    "PBKDF2", false, ["deriveKey"]
+  );
+  cryptoKey = await crypto.subtle.deriveKey(
+    { name:"PBKDF2", salt: enc.encode("privatechat-"+ROOM_CODE), iterations:150000, hash:"SHA-256" },
+    baseKey, { name:"AES-GCM", length:256 }, false, ["encrypt","decrypt"]
+  );
+}
+const keyReady = deriveKey();
+function bufToB64(buf){ return btoa(String.fromCharCode(...new Uint8Array(buf))); }
+function b64ToBuf(b64){ return Uint8Array.from(atob(b64), c=>c.charCodeAt(0)); }
+async function encryptText(plaintext) {
+  await keyReady;
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const ct = await crypto.subtle.encrypt({name:"AES-GCM", iv}, cryptoKey, new TextEncoder().encode(plaintext));
+  return bufToB64(iv) + ":" + bufToB64(ct);
+}
+async function decryptText(payload) {
+  if (typeof payload !== "string" || !payload.includes(":")) return payload;
+  try {
+    await keyReady;
+    const [ivB64, ctB64] = payload.split(":");
+    const pt = await crypto.subtle.decrypt({name:"AES-GCM", iv:b64ToBuf(ivB64)}, cryptoKey, b64ToBuf(ctB64));
+    return new TextDecoder().decode(pt);
+  } catch (e) { return payload; }
+}
+// ── end E2E encryption ──
+
 const messagesDiv = document.getElementById("messages");
 const msgInput    = document.getElementById("message");
 const sendBtn     = document.getElementById("send-btn");
@@ -116,9 +157,16 @@ socketio.on("disconnect", () => {
   }
 });
 
-socketio.on("message", (data) => {
-  if (data.type === "voice") createVoiceMessage(data);
-  else createMessage(data.name, data.message, data.timestamp, data.reply_to || null);
+socketio.on("message", async (data) => {
+  if (data.type === "voice") {
+    const audio = await decryptText(data.audio);
+    createVoiceMessage({...data, audio});
+  } else {
+    const msg = await decryptText(data.message);
+    let replyTo = data.reply_to || null;
+    if (replyTo && replyTo.message) replyTo = {...replyTo, message: await decryptText(replyTo.message)};
+    createMessage(data.name, msg, data.timestamp, replyTo);
+  }
   if (data.name !== USERNAME && !isMuted) playSound();
 });
 
@@ -128,7 +176,7 @@ socketio.on("member_list", (list) => {
   ml.innerHTML = list.map(m =>
     `<div class="members-list-item">
       <span class="member-dot"></span>
-      <span class="member-name${m===USERNAME?" member-you":""}">${m}${m===USERNAME?" (you)":""}</span>
+      <span class="member-name${m===USERNAME?" member-you":""}">${esc(m)}${m===USERNAME?" (you)":""}</span>
     </div>`
   ).join("");
 });
@@ -165,6 +213,11 @@ document.addEventListener("click", (e) => {
 
 // ── Messages ───────────────────────────────────────────────────────────
 function scrollToBottom() { messagesDiv.scrollTop = messagesDiv.scrollHeight; }
+function esc(s) {
+  const d = document.createElement("div");
+  d.innerText = s == null ? "" : String(s);
+  return d.innerHTML;
+}
 
 function createMessage(name, msg, timestamp, replyData) {
   const isOwn = name === USERNAME;
@@ -173,15 +226,15 @@ function createMessage(name, msg, timestamp, replyData) {
   let replyHtml = "";
   if (replyData) {
     replyHtml = `<div class="reply-quote">
-      <div class="reply-quote-name">${replyData.name}</div>
-      <div class="reply-quote-text">${replyData.message}</div>
+      <div class="reply-quote-name">${esc(replyData.name)}</div>
+      <div class="reply-quote-text">${esc(replyData.message)}</div>
     </div>`;
   }
   div.innerHTML = `${replyHtml}
-    <div class="username">${name}</div>
-    <div class="message">${msg}</div>
+    <div class="username">${esc(name)}</div>
+    <div class="message">${esc(msg)}</div>
     <div class="msg-footer">
-      <span class="timestamp">${timestamp}</span>
+      <span class="timestamp">${esc(timestamp)}</span>
       <button class="reply-btn" title="Reply">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" width="13" height="13">
           <polyline points="9 17 4 12 9 7"/><path d="M20 18v-2a4 4 0 0 0-4-4H4"/>
@@ -200,7 +253,7 @@ function createVoiceMessage(data) {
   const div = document.createElement("div");
   div.className = isOwn ? "right-message-box" : "left-message-box";
   div.innerHTML = `
-    <div class="username">${data.name}</div>
+    <div class="username">${esc(data.name)}</div>
     <div class="voice-player">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" width="16" height="16" style="flex-shrink:0;opacity:.7">
         <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
@@ -208,7 +261,7 @@ function createVoiceMessage(data) {
       </svg>
       <audio controls src="${data.audio}" preload="metadata"></audio>
     </div>
-    <div class="msg-footer"><span class="timestamp">${data.timestamp}</span></div>`;
+    <div class="msg-footer"><span class="timestamp">${esc(data.timestamp)}</span></div>`;
   messagesDiv.appendChild(div);
   scrollToBottom();
 }
@@ -234,9 +287,12 @@ function cancelReply() { replyTo=null; replyBar.classList.add("hidden"); }
 document.getElementById("reply-cancel-btn").addEventListener("click", cancelReply);
 
 // ── Send ───────────────────────────────────────────────────────────────
-function sendMessage() {
+async function sendMessage() {
   const val = msgInput.value.trim(); if(!val) return;
-  socketio.emit("message",{type:"text",data:val,reply_to:replyTo});
+  const ciphertext = await encryptText(val);
+  let replyPayload = null;
+  if (replyTo) replyPayload = { name: replyTo.name, message: await encryptText(replyTo.message) };
+  socketio.emit("message",{type:"text",data:ciphertext,reply_to:replyPayload});
   msgInput.value=""; cancelReply(); msgInput.focus();
 }
 sendBtn.addEventListener("click", sendMessage);
@@ -268,7 +324,10 @@ function stopRecording() {
 function sendVoice() {
   const blob=new Blob(audioChunks,{type:audioChunks[0]?.type||"audio/webm"});
   const reader=new FileReader();
-  reader.onload=()=>socketio.emit("message",{type:"voice",audio:reader.result,duration:Math.round((Date.now()-recordStart)/1000)});
+  reader.onload=async ()=>{
+    const ciphertext = await encryptText(reader.result);
+    socketio.emit("message",{type:"voice",audio:ciphertext,duration:Math.round((Date.now()-recordStart)/1000)});
+  };
   reader.readAsDataURL(blob);
 }
 
@@ -284,15 +343,26 @@ document.addEventListener("fullscreenchange",()=>{
 });
 
 // ── Render history ─────────────────────────────────────────────────────
-{% for msg in messages %}
-{% if msg.get("type") == "voice" %}
-createVoiceMessage({name:"{{ msg.name }}",audio:"{{ msg.audio }}",timestamp:"{{ msg.timestamp }}"});
-{% else %}
-createMessage("{{ msg.name }}","{{ msg.message }}","{{ msg.timestamp }}",{{ msg.reply_to | tojson if msg.reply_to else 'null' }});
-{% endif %}
-{% endfor %}
+(async () => {
+  const history = JSON.parse(document.getElementById("history-data").textContent);
+  for (const msg of history) {
+    if (msg.type === "voice") {
+      const audio = await decryptText(msg.audio);
+      createVoiceMessage({...msg, audio});
+    } else {
+      const text = await decryptText(msg.message);
+      let replyTo = msg.reply_to || null;
+      if (replyTo && replyTo.message) replyTo = {...replyTo, message: await decryptText(replyTo.message)};
+      createMessage(msg.name, text, msg.timestamp, replyTo);
+    }
+  }
+})();
 
 });
+</script>
+
+<script id="history-data" type="application/json">
+{{ messages | tojson }}
 </script>
 
 {% endblock %}
