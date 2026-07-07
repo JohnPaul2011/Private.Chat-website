@@ -31,7 +31,8 @@
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <input name="name" placeholder="Username" value="{{ username }}" required autocomplete="off">
       <input name="code" placeholder="Room ID (leave blank to auto-generate)" value="{{ code }}" autocomplete="off">
-      <input name="password" placeholder="Room password (optional)" id="pwField" autocomplete="off">
+      <input type="text" placeholder="Room password (optional)" id="pwField" autocomplete="off">
+      <input type="hidden" name="password" id="pwHash">
       <label class="toggle-row">
         <div class="toggle-info">
           <span class="toggle-title">Save chat history</span>
@@ -55,7 +56,7 @@
     const enc = new TextEncoder().encode(pw);
     const hash = await crypto.subtle.digest("SHA-256", enc);
     const hex = Array.from(new Uint8Array(hash)).map(b=>b.toString(16).padStart(2,"0")).join("");
-    document.getElementById("pwField").value = hex;
+    document.getElementById("pwHash").value = hex;
     form.submit();
   });
   </script>

@@ -12,7 +12,8 @@ app.config['SESSION_COOKIE_HTTPONLY'] = True
 app.config['SESSION_COOKIE_SAMESITE'] = "Lax"
 app.config['SESSION_COOKIE_SECURE'] = os.environ.get("FORCE_HTTPS", "1") == "1"
 app.config['PERMANENT_SESSION_LIFETIME'] = datetime.timedelta(minutes=30)
-socketio = SocketIO(app, async_mode="threading", logger=False, engineio_logger=False)
+socketio = SocketIO(app, async_mode="threading", logger=False, engineio_logger=False,
+                    ping_timeout=10, ping_interval=8)
 
 BAD_USERNAMES = {"admin","server","system","moderator","host"}
 rooms        = {}
