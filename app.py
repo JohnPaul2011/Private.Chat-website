@@ -3,7 +3,7 @@ from flask_socketio import SocketIO, send, join_room, leave_room, emit
 from werkzeug.security import generate_password_hash, check_password_hash
 from werkzeug.middleware.proxy_fix import ProxyFix
 from colorama import init as init_color
-import time, random, logging, os, re, hmac, hashlib, secrets, base64, struct, datetime, threading
+import time, random, logging, os, re, hmac, hashlib, secrets, base64, struct, datetime, threading, uuid
 
 _sysrand = secrets.SystemRandom()
 
@@ -364,7 +364,8 @@ def room():
     if not r or not session.get("name") or r not in rooms:
         return redirect("/")
     history = rooms[r]["messages"] if rooms[r].get("save_history") else []
-    return render_template("room.html", code=r, messages=history, username=session["name"])
+    seen = rooms[r].get("seen", {}) if rooms[r].get("save_history") else {}
+    return render_template("room.html", code=r, messages=history, username=session["name"], seen=seen)
 
 @app.route("/logout")
 def logout():
@@ -382,6 +383,8 @@ def games_page():
 
 
 # ─────────────────────────────── chat socket ────────────────────────────────
+MAX_FILE_B64 = int(5 * 1024 * 1024 * 1.4)  # 5MB raw budget, generous headroom for base64+gzip overhead
+
 @socketio.on("message")
 def message(data):
     r    = session.get("room")
@@ -389,23 +392,55 @@ def message(data):
     if r not in rooms or not name: return
     if name not in rooms[r]["members"]: return
     if rate_limited(name): return
-    ts = time.strftime('%H:%M %p')
-    if data.get("type") == "voice":
+    ts  = time.strftime('%H:%M %p')
+    mid = str(uuid.uuid4())
+    mtype = data.get("type")
+    if mtype == "voice":
         audio = data.get("audio","")
         if not isinstance(audio, str) or len(audio) > 3_000_000: return
-        content = {"name":name,"type":"voice","audio":audio,
+        content = {"id":mid,"name":name,"type":"voice","audio":audio,
                    "duration":data.get("duration",0),"timestamp":ts}
+    elif mtype == "file":
+        payload = data.get("data","")
+        filename = str(data.get("filename",""))[:255]
+        mime = str(data.get("mime",""))[:100]
+        if not isinstance(payload, str) or len(payload) > MAX_FILE_B64: return
+        content = {"id":mid,"name":name,"type":"file","data":payload,
+                   "filename":filename,"mime":mime,"timestamp":ts}
     else:
         text = data.get("data","")
         if not isinstance(text, str) or len(text) > 8000: return
-        content = {"name":name,"type":"text","message":text,
+        content = {"id":mid,"name":name,"type":"text","message":text,
                    "reply_to":data.get("reply_to"),"timestamp":ts}
     send(content, to=r)
     with _state_lock:
         rooms[r]["messages"].append(content)
+        rooms[r].setdefault("seen", {})[mid] = {}
         if len(rooms[r]["messages"]) > 500:
             rooms[r]["messages"] = rooms[r]["messages"][-500:]
     _push_admin_update()
+
+@socketio.on("mark_seen")
+def mark_seen(data):
+    r    = session.get("room")
+    name = session.get("name","")
+    if r not in rooms or not name: return
+    ids = data.get("ids", [])
+    if not isinstance(ids, list): return
+    ts = time.time()
+    updates = []
+    with _state_lock:
+        seen_map = rooms[r].setdefault("seen", {})
+        total_others = max(len(rooms[r]["members"]) - 1, 0)
+        for mid in ids[:100]:
+            if not isinstance(mid, str): continue
+            entry = seen_map.setdefault(mid, {})
+            if name in entry: continue        # already recorded
+            entry[name] = ts
+            all_seen = len(entry) >= total_others and total_others > 0
+            updates.append({"id": mid, "seen_by": dict(entry), "all_seen": all_seen})
+    for u in updates:
+        socketio.emit("seen_update", u, to=r)
 
 @socketio.on("connect")
 def connect(auth=None):

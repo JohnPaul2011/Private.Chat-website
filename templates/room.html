@@ -1,6 +1,8 @@
 {% extends "index.html" %}
 {% block main %}
 
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pako/2.1.0/pako.min.js"></script>
+
 <div class="room-wrapper">
 
   <!-- ── Chat header ── -->
@@ -75,6 +77,12 @@
 
   <!-- ── Input bar ── -->
   <div class="inputs">
+    <button id="attach-btn" class="input-icon-btn" title="Send a file or photo">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="20" height="20">
+        <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/>
+      </svg>
+    </button>
+    <input id="file-input" type="file" hidden accept="image/*,.pdf,.txt,.zip,.doc,.docx,.mp4,.mov">
     <button id="mic-btn" class="input-icon-btn" title="Record voice message">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="20" height="20">
         <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
@@ -137,6 +145,23 @@ async function decryptText(payload) {
     return new TextDecoder().decode(pt);
   } catch (e) { return payload; }
 }
+
+// ── File/photo transfer: encrypt raw bytes first, THEN gzip the ciphertext ──
+async function encryptBytesThenGzip(bytes) {
+  await keyReady;
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const ct = await crypto.subtle.encrypt({name:"AES-GCM", iv}, cryptoKey, bytes);
+  const compressed = pako.gzip(new Uint8Array(ct), { level: 9 });
+  return bufToB64(iv) + ":" + bufToB64(compressed.buffer);
+}
+async function gunzipThenDecryptBytes(payload) {
+  await keyReady;
+  const [ivB64, gzB64] = payload.split(":");
+  const compressed = b64ToBuf(gzB64);
+  const ct = pako.ungzip(compressed);
+  const pt = await crypto.subtle.decrypt({name:"AES-GCM", iv:b64ToBuf(ivB64)}, cryptoKey, ct);
+  return new Uint8Array(pt);
+}
 // ── end E2E encryption ──
 
 const messagesDiv = document.getElementById("messages");
@@ -170,11 +195,13 @@ socketio.on("message", async (data) => {
   if (data.type === "voice") {
     const audio = await decryptText(data.audio);
     createVoiceMessage({...data, audio});
+  } else if (data.type === "file") {
+    createFileMessage(data);
   } else {
     const msg = await decryptText(data.message);
     let replyTo = data.reply_to || null;
     if (replyTo && replyTo.message) replyTo = {...replyTo, message: await decryptText(replyTo.message)};
-    createMessage(data.name, msg, data.timestamp, replyTo);
+    createMessage(data.name, msg, data.timestamp, replyTo, data.id);
   }
   if (data.name !== USERNAME && !isMuted) playSound();
 });
@@ -250,10 +277,24 @@ function esc(s) {
   return d.innerHTML;
 }
 
-function createMessage(name, msg, timestamp, replyData) {
+const seenState = {};   // msgId -> { seen_by: {user: ts}, all_seen: bool }
+
+function tickHtml(mid) {
+  const st = seenState[mid];
+  const allSeen = st && st.all_seen;
+  const color = allSeen ? "#53bdeb" : "currentColor";
+  return `<span class="msg-ticks" data-mid="${esc(mid)}" style="color:${color};cursor:pointer" title="Message info">
+    <svg viewBox="0 0 16 11" width="15" height="11" fill="none" stroke="currentColor" stroke-width="1.4">
+      <path d="M1 5.5 4.5 9 11 1.5"/><path d="M5.5 5.5 9 9 15.5 1.5"/>
+    </svg>
+  </span>`;
+}
+
+function createMessage(name, msg, timestamp, replyData, mid) {
   const isOwn = name === USERNAME;
   const div = document.createElement("div");
   div.className = isOwn ? "right-message-box" : "left-message-box";
+  if (mid) div.dataset.mid = mid;
   let replyHtml = "";
   if (replyData) {
     replyHtml = `<div class="reply-quote">
@@ -266,6 +307,7 @@ function createMessage(name, msg, timestamp, replyData) {
     <div class="message">${esc(msg)}</div>
     <div class="msg-footer">
       <span class="timestamp">${esc(timestamp)}</span>
+      ${isOwn && mid ? tickHtml(mid) : ""}
       <button class="reply-btn" title="Reply">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" width="13" height="13">
           <polyline points="9 17 4 12 9 7"/><path d="M20 18v-2a4 4 0 0 0-4-4H4"/>
@@ -275,7 +317,13 @@ function createMessage(name, msg, timestamp, replyData) {
   div.querySelector(".reply-btn").addEventListener("click", (e) => {
     e.stopPropagation(); setReplyTo({ name, message: msg });
   });
+  if (isOwn && mid) {
+    div.querySelector(".msg-ticks")?.addEventListener("click", (e) => {
+      e.stopPropagation(); showSeenInfo(mid);
+    });
+  }
   messagesDiv.appendChild(div);
+  if (!isOwn && mid) observeForSeen(div);
   scrollToBottom();
 }
 
@@ -283,6 +331,7 @@ function createVoiceMessage(data) {
   const isOwn = data.name === USERNAME;
   const div = document.createElement("div");
   div.className = isOwn ? "right-message-box" : "left-message-box";
+  if (data.id) div.dataset.mid = data.id;
   div.innerHTML = `
     <div class="username">${esc(data.name)}</div>
     <div class="voice-player">
@@ -292,9 +341,109 @@ function createVoiceMessage(data) {
       </svg>
       <audio controls src="${data.audio}" preload="metadata"></audio>
     </div>
-    <div class="msg-footer"><span class="timestamp">${esc(data.timestamp)}</span></div>`;
+    <div class="msg-footer">
+      <span class="timestamp">${esc(data.timestamp)}</span>
+      ${isOwn && data.id ? tickHtml(data.id) : ""}
+    </div>`;
+  if (isOwn && data.id) {
+    div.querySelector(".msg-ticks")?.addEventListener("click", (e) => {
+      e.stopPropagation(); showSeenInfo(data.id);
+    });
+  }
   messagesDiv.appendChild(div);
+  if (!isOwn && data.id) observeForSeen(div);
   scrollToBottom();
+}
+
+async function createFileMessage(data) {
+  const isOwn = data.name === USERNAME;
+  const div = document.createElement("div");
+  div.className = isOwn ? "right-message-box" : "left-message-box";
+  if (data.id) div.dataset.mid = data.id;
+
+  let bodyHtml = `<div class="username">${esc(data.name)}</div><div class="message">📎 ${esc(data.filename)}</div>`;
+  try {
+    const bytes = await gunzipThenDecryptBytes(data.data);
+    const blob = new Blob([bytes], { type: data.mime || "application/octet-stream" });
+    const url = URL.createObjectURL(blob);
+    if ((data.mime || "").startsWith("image/")) {
+      bodyHtml = `<div class="username">${esc(data.name)}</div>
+        <a href="${url}" download="${esc(data.filename)}">
+          <img src="${url}" alt="${esc(data.filename)}" style="max-width:220px;max-height:220px;border-radius:8px;display:block;margin-top:4px;">
+        </a>`;
+    } else {
+      bodyHtml = `<div class="username">${esc(data.name)}</div>
+        <a href="${url}" download="${esc(data.filename)}" style="display:flex;align-items:center;gap:6px;text-decoration:none;color:inherit;">
+          📎 <span>${esc(data.filename)}</span>
+        </a>`;
+    }
+  } catch (e) {
+    bodyHtml += `<div style="opacity:.7;font-size:12px">[unable to decrypt file]</div>`;
+  }
+
+  div.innerHTML = `${bodyHtml}
+    <div class="msg-footer">
+      <span class="timestamp">${esc(data.timestamp)}</span>
+      ${isOwn && data.id ? tickHtml(data.id) : ""}
+    </div>`;
+  if (isOwn && data.id) {
+    div.querySelector(".msg-ticks")?.addEventListener("click", (e) => {
+      e.stopPropagation(); showSeenInfo(data.id);
+    });
+  }
+  messagesDiv.appendChild(div);
+  if (!isOwn && data.id) observeForSeen(div);
+  scrollToBottom();
+}
+
+// ── Read receipts ────────────────────────────────────────────────────────
+let pendingSeenIds = new Set();
+let seenFlushTimer = null;
+function queueSeen(mid) {
+  pendingSeenIds.add(mid);
+  if (seenFlushTimer) return;
+  seenFlushTimer = setTimeout(() => {
+    if (pendingSeenIds.size) socketio.emit("mark_seen", { ids: Array.from(pendingSeenIds) });
+    pendingSeenIds = new Set();
+    seenFlushTimer = null;
+  }, 600);
+}
+const seenObserver = new IntersectionObserver((entries) => {
+  entries.forEach(entry => {
+    if (entry.isIntersecting && document.visibilityState === "visible") {
+      const mid = entry.target.dataset.mid;
+      if (mid) { queueSeen(mid); seenObserver.unobserve(entry.target); }
+    }
+  });
+}, { threshold: 0.6 });
+function observeForSeen(el) { seenObserver.observe(el); }
+
+socketio.on("seen_update", (u) => {
+  seenState[u.id] = { seen_by: u.seen_by, all_seen: u.all_seen };
+  const el = messagesDiv.querySelector(`[data-mid="${CSS.escape(u.id)}"] .msg-ticks`);
+  if (el) el.style.color = u.all_seen ? "#53bdeb" : "currentColor";
+});
+
+function showSeenInfo(mid) {
+  const st = seenState[mid];
+  const entries = st ? Object.entries(st.seen_by) : [];
+  const overlay = document.createElement("div");
+  overlay.style.cssText = "position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,.6);"
+    + "display:flex;align-items:center;justify-content:center;padding:24px;";
+  const rows = entries.length
+    ? entries.map(([u,ts]) => `<div style="display:flex;justify-content:space-between;gap:16px;padding:4px 0;">
+        <span>${esc(u)}</span><span style="opacity:.7">${new Date(ts*1000).toLocaleString()}</span>
+      </div>`).join("")
+    : `<div style="opacity:.7">No one has seen this message yet.</div>`;
+  overlay.innerHTML = `<div style="background:var(--panel,#1e1e1e);color:var(--text,#fff);
+      padding:20px 24px;border-radius:12px;max-width:320px;width:100%;">
+      <strong>Seen by</strong><div style="margin-top:10px">${rows}</div>
+      <button id="closeInfoBtn" style="margin-top:14px;padding:6px 14px;border:none;border-radius:6px;
+        background:#333;color:#fff;cursor:pointer;">Close</button>
+    </div>`;
+  overlay.addEventListener("click", (e) => { if (e.target === overlay) overlay.remove(); });
+  document.body.appendChild(overlay);
+  overlay.querySelector("#closeInfoBtn").addEventListener("click", () => overlay.remove());
 }
 
 function playSound() {
@@ -362,6 +511,34 @@ function sendVoice() {
   reader.readAsDataURL(blob);
 }
 
+// ── File / photo send ──────────────────────────────────────────────────
+const MAX_FILE_BYTES = 5 * 1024 * 1024; // 5MB cap
+const attachBtn  = document.getElementById("attach-btn");
+const fileInput  = document.getElementById("file-input");
+attachBtn.addEventListener("click", () => fileInput.click());
+fileInput.addEventListener("change", async () => {
+  const file = fileInput.files[0];
+  fileInput.value = "";
+  if (!file) return;
+  if (file.size > MAX_FILE_BYTES) {
+    alert(`File too large. Max size is ${(MAX_FILE_BYTES/1024/1024).toFixed(0)}MB.`);
+    return;
+  }
+  attachBtn.disabled = true;
+  try {
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    const payload = await encryptBytesThenGzip(bytes);
+    socketio.emit("message", {
+      type: "file", data: payload,
+      filename: file.name, mime: file.type || "application/octet-stream"
+    });
+  } catch (e) {
+    alert("Failed to send file.");
+  } finally {
+    attachBtn.disabled = false;
+  }
+});
+
 // ── Fullscreen ─────────────────────────────────────────────────────────
 document.getElementById("fullscreen-btn").addEventListener("click",()=>{
   if(!document.fullscreenElement) roomWrapper.requestFullscreen().catch(()=>{});
@@ -375,16 +552,24 @@ document.addEventListener("fullscreenchange",()=>{
 
 // ── Render history ─────────────────────────────────────────────────────
 (async () => {
+  const initialSeen = JSON.parse(document.getElementById("seen-data").textContent);
+  for (const [mid, seenBy] of Object.entries(initialSeen)) {
+    const total = Object.keys(seenBy).length;
+    seenState[mid] = { seen_by: seenBy, all_seen: total > 0 };
+  }
+
   const history = JSON.parse(document.getElementById("history-data").textContent);
   for (const msg of history) {
     if (msg.type === "voice") {
       const audio = await decryptText(msg.audio);
       createVoiceMessage({...msg, audio});
+    } else if (msg.type === "file") {
+      await createFileMessage(msg);
     } else {
       const text = await decryptText(msg.message);
       let replyTo = msg.reply_to || null;
       if (replyTo && replyTo.message) replyTo = {...replyTo, message: await decryptText(replyTo.message)};
-      createMessage(msg.name, text, msg.timestamp, replyTo);
+      createMessage(msg.name, text, msg.timestamp, replyTo, msg.id);
     }
   }
 })();
@@ -394,6 +579,9 @@ document.addEventListener("fullscreenchange",()=>{
 
 <script id="history-data" type="application/json">
 {{ messages | tojson }}
+</script>
+<script id="seen-data" type="application/json">
+{{ seen | tojson }}
 </script>
 
 {% endblock %}
