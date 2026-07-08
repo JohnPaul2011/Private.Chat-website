@@ -179,40 +179,104 @@ def admin_logout():
     session.pop("is_admin", None)
     return redirect(url_for("index"))
 
+def _admin_room_snapshot():
+    with _state_lock:
+        return {c: {"members": list(r["members"]), "message_count": len(r["messages"])}
+                for c, r in rooms.items()}
+
+def _push_admin_update():
+    socketio.emit("admin_rooms_update", _admin_room_snapshot(), to="admin_channel")
+
 @app.route("/admin")
 def admin_panel():
     require_admin()
-    room_data = {c: {"members": list(r["members"]), "message_count": len(r["messages"])} for c, r in rooms.items()}
-    return render_template("admin.html", rooms=room_data)
+    return render_template("admin.html", rooms=_admin_room_snapshot())
 
 @app.route("/admin/clear/<code>", methods=["POST"])
 def admin_clear(code):
     require_admin(); check_csrf()
-    if code in rooms:
-        rooms[code]["messages"] = []
+    with _state_lock:
+        exists = code in rooms
+        if exists: rooms[code]["messages"] = []
+    if exists:
         flash(f"Cleared {code}.","info")
+        _push_admin_update()
     return redirect(url_for("admin_panel"))
 
 @app.route("/admin/kick/<code>/<user>", methods=["POST"])
 def admin_kick(code, user):
     require_admin(); check_csrf()
-    room = rooms.get(code)
-    if room and user in room["members"]:
+    with _state_lock:
+        room = rooms.get(code)
+        kicked = bool(room and user in room["members"])
+        members = None
+        room_emptied = False
+        if kicked:
+            room["members"].remove(user)
+            members = list(room["members"])
+            if not room["members"]:
+                del rooms[code]
+                room_passwords.pop(code, None)
+                room_emptied = True
+    if kicked:
         socketio.emit("kicked_user", {"user": user}, to=code)
-        room["members"].remove(user)
-        socketio.emit("member_list", room["members"], to=code)
+        if not room_emptied:
+            socketio.emit("member_list", members, to=code)
         flash(f"Kicked {user} from {code}.","info")
+        _push_admin_update()
     return redirect(url_for("admin_panel"))
 
 @app.route("/admin/kickall/<code>", methods=["POST"])
 def admin_kickall(code):
     require_admin(); check_csrf()
-    if code in rooms:
+    with _state_lock:
+        exists = code in rooms
+        if exists:
+            room_passwords.pop(code, None)
+            rooms.pop(code, None)
+    if exists:
         socketio.emit("kicked", {}, to=code)
-        room_passwords.pop(code, None)
-        rooms.pop(code, None)
         flash(f"Kicked all from {code}.","info")
+        _push_admin_update()
     return redirect(url_for("admin_panel"))
+
+@app.route("/admin/announce", methods=["POST"])
+def admin_announce():
+    require_admin(); check_csrf()
+    text = (request.form.get("announcement") or "").strip()
+    target = request.form.get("target","all")   # "all" or a specific room code
+    if not text:
+        flash("Announcement text can't be empty.","error")
+        return redirect(url_for("admin_panel"))
+    if len(text) > 2000:
+        flash("Announcement is too long.","error")
+        return redirect(url_for("admin_panel"))
+
+    ts = time.strftime('%H:%M %p')
+    content = {"name":"Announcement","type":"text","message":text,
+               "reply_to":None,"timestamp":ts}
+
+    if target == "all":
+        with _state_lock:
+            codes = list(rooms.keys())
+        for code in codes:
+            with _state_lock:
+                if code in rooms:
+                    rooms[code]["messages"].append(content)
+            send(content, to=code)
+        flash(f"Announcement sent to {len(codes)} room(s).","info")
+    else:
+        with _state_lock:
+            exists = target in rooms
+            if exists: rooms[target]["messages"].append(content)
+        if exists:
+            send(content, to=target)
+            flash(f"Announcement sent to {target}.","info")
+        else:
+            flash("Room not found.","error")
+    return redirect(url_for("admin_panel"))
+
+
 
 @app.route("/join", methods=["GET","POST"])
 def join():
@@ -287,6 +351,7 @@ def create():
         with _state_lock:
             rooms[code] = {"members":[], "messages":[], "save_history": save_history}
             room_passwords[code] = pw
+        _push_admin_update()
         session.permanent = True
         session["room"] = code
         session["name"] = name
@@ -340,9 +405,14 @@ def message(data):
         rooms[r]["messages"].append(content)
         if len(rooms[r]["messages"]) > 500:
             rooms[r]["messages"] = rooms[r]["messages"][-500:]
+    _push_admin_update()
 
 @socketio.on("connect")
 def connect(auth=None):
+    if session.get("is_admin"):
+        join_room("admin_channel")
+        emit("admin_rooms_update", _admin_room_snapshot())
+
     r    = session.get("room")
     name = session.get("name")
     if not r or not name or r not in rooms: return
@@ -353,6 +423,7 @@ def connect(auth=None):
     send({"name":"System","type":"text","message":f"{name} entered the room",
           "timestamp":time.strftime('%H:%M %p')}, to=r)
     socketio.emit("member_list", members, to=r)
+    _push_admin_update()
 
 @socketio.on("disconnect")
 def disconnect():
@@ -371,6 +442,7 @@ def disconnect():
                   "timestamp":time.strftime('%H:%M %p')}, to=r)
             if not empty:
                 socketio.emit("member_list", members, to=r)
+            _push_admin_update()
 
     gc = session.get("game_code")
     gu = session.get("game_user")

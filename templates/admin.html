@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>Private.chat — Admin Panel</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}"/>
+  <script src="{{ url_for('static', filename='/js/socket.io.js') }}"></script>
   <script>
     (function(){
       const saved=localStorage.getItem("theme");
@@ -19,9 +20,16 @@
     .room-card { background:var(--panel,#222); color:var(--text,#fff); padding:14px; margin:12px 0; border-radius:10px; }
     .room-card h3 { margin:0 0 8px 0; }
     .member-row { display:flex; align-items:center; justify-content:space-between; gap:8px; margin:6px 0; }
-    .room-card form { display:inline-block; margin-right:8px; }
-    .kick-btn, .danger-btn { background:#e53935; color:#fff; border:none; border-radius:6px; padding:5px 10px; cursor:pointer; }
+    .room-card .btn-row { margin-top:8px; }
+    .kick-btn, .danger-btn { background:#e53935; color:#fff; border:none; border-radius:6px; padding:5px 10px; cursor:pointer; margin-right:6px; }
     .kick-btn:hover, .danger-btn:hover { background:#c62828; }
+    .live-dot { display:inline-block; width:8px; height:8px; border-radius:50%; background:#4caf50; margin-right:6px; }
+    .live-dot.off { background:#999; }
+    .announce-box { background:var(--panel,#222); color:var(--text,#fff); padding:14px; border-radius:10px; margin:16px 0; }
+    .announce-box textarea { width:100%; min-height:70px; margin:8px 0; box-sizing:border-box; }
+    .announce-box select { margin-bottom:8px; }
+    .announce-box button { background:#2e7d32; color:#fff; border:none; border-radius:6px; padding:7px 14px; cursor:pointer; }
+    .announce-box button:hover { background:#1b5e20; }
   </style>
 </head>
 <body>
@@ -31,37 +39,114 @@
   {% endfor %}{% endif %}{% endwith %}
 
   <div class="container">
-    <h2>Admin Panel</h2>
+    <h2><span class="live-dot" id="live-dot"></span>Admin Panel</h2>
     <p><a href="{{ url_for('admin_logout') }}">Log out</a></p>
 
-    {% if not rooms %}
-    <p>No active rooms.</p>
-    {% endif %}
-
-    {% for code, r in rooms.items() %}
-    <div class="room-card">
-      <h3>Room {{ code }} — {{ r.message_count }} messages</h3>
-
-      {% for member in r.members %}
-      <div class="member-row">
-        <span>{{ member }}</span>
-        <form method="POST" action="{{ url_for('admin_kick', code=code, user=member) }}">
-          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-          <button type="submit" class="kick-btn">Kick</button>
-        </form>
-      </div>
-      {% endfor %}
-
-      <form method="POST" action="{{ url_for('admin_kickall', code=code) }}">
+    <div class="announce-box">
+      <strong>Send announcement</strong>
+      <form id="announceForm">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-        <button type="submit" class="danger-btn">Kick All</button>
-      </form>
-      <form method="POST" action="{{ url_for('admin_clear', code=code) }}">
-        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-        <button type="submit" class="danger-btn">Clear Messages</button>
+        <br>
+        <select name="target" id="announceTarget">
+          <option value="all">All rooms</option>
+        </select>
+        <br>
+        <textarea name="announcement" placeholder="Announcement text..." required maxlength="2000"></textarea>
+        <br>
+        <button type="submit">Send</button>
       </form>
     </div>
-    {% endfor %}
+
+    <div id="roomsContainer">
+      <p id="noRooms">No active rooms.</p>
+    </div>
   </div>
+
+  <script id="initial-rooms" type="application/json">{{ rooms | tojson }}</script>
+
+  <script>
+  const CSRF = document.querySelector('input[name="csrf_token"]').value;
+
+  function esc(s) {
+    const d = document.createElement("div");
+    d.innerText = s == null ? "" : String(s);
+    return d.innerHTML;
+  }
+
+  function renderRooms(rooms) {
+    const container = document.getElementById("roomsContainer");
+    const codes = Object.keys(rooms);
+
+    if (codes.length === 0) {
+      container.innerHTML = '<p id="noRooms">No active rooms.</p>';
+    } else {
+      container.innerHTML = codes.map(code => {
+        const r = rooms[code];
+        const memberRows = r.members.map(member => `
+          <div class="member-row">
+            <span>${esc(member)}</span>
+            <button class="kick-btn" data-action="kick" data-code="${esc(code)}" data-user="${esc(member)}">Kick</button>
+          </div>`).join("");
+        return `
+          <div class="room-card">
+            <h3>Room ${esc(code)} — ${r.message_count} messages</h3>
+            ${memberRows}
+            <div class="btn-row">
+              <button class="danger-btn" data-action="kickall" data-code="${esc(code)}">Kick All</button>
+              <button class="danger-btn" data-action="clear" data-code="${esc(code)}">Clear Messages</button>
+            </div>
+          </div>`;
+      }).join("");
+    }
+
+    // keep the announcement target select in sync with live rooms
+    const select = document.getElementById("announceTarget");
+    const prevValue = select.value;
+    select.innerHTML = '<option value="all">All rooms</option>' +
+      codes.map(c => `<option value="${esc(c)}">Room ${esc(c)}</option>`).join("");
+    if (codes.includes(prevValue) || prevValue === "all") select.value = prevValue;
+  }
+
+  async function adminAction(action, code, user) {
+    let url;
+    if (action === "kick") url = `/admin/kick/${encodeURIComponent(code)}/${encodeURIComponent(user)}`;
+    else if (action === "kickall") url = `/admin/kickall/${encodeURIComponent(code)}`;
+    else if (action === "clear") url = `/admin/clear/${encodeURIComponent(code)}`;
+    else return;
+    await fetch(url, {
+      method: "POST",
+      headers: { "X-CSRF-Token": CSRF, "Content-Type": "application/x-www-form-urlencoded" },
+      body: "csrf_token=" + encodeURIComponent(CSRF)
+    });
+    // live update arrives via socket; no manual re-render needed
+  }
+
+  document.getElementById("roomsContainer").addEventListener("click", (e) => {
+    const btn = e.target.closest("button[data-action]");
+    if (!btn) return;
+    adminAction(btn.dataset.action, btn.dataset.code, btn.dataset.user);
+  });
+
+  document.getElementById("announceForm").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const form = e.target;
+    const body = new URLSearchParams(new FormData(form)).toString();
+    await fetch("/admin/announce", {
+      method: "POST",
+      headers: { "X-CSRF-Token": CSRF, "Content-Type": "application/x-www-form-urlencoded" },
+      body
+    });
+    form.querySelector("textarea").value = "";
+  });
+
+  // ── initial render + live updates ──────────────────────────────────────
+  renderRooms(JSON.parse(document.getElementById("initial-rooms").textContent));
+
+  const socketio = io({ transports: ["polling"] });
+  const dot = document.getElementById("live-dot");
+  socketio.on("connect", () => dot.classList.remove("off"));
+  socketio.on("disconnect", () => dot.classList.add("off"));
+  socketio.on("admin_rooms_update", (rooms) => renderRooms(rooms));
+  </script>
 </body>
 </html>

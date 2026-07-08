@@ -190,6 +190,28 @@ socketio.on("member_list", (list) => {
   ).join("");
 });
 
+// ── Kicked notices ───────────────────────────────────────────────────────
+function showKickedOverlay(text) {
+  const overlay = document.createElement("div");
+  overlay.style.cssText = "position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,.75);"
+    + "display:flex;align-items:center;justify-content:center;text-align:center;padding:24px;";
+  overlay.innerHTML = `<div style="background:var(--panel,#1e1e1e);color:var(--text,#fff);
+    padding:24px 28px;border-radius:12px;max-width:320px;font-size:15px;line-height:1.5;">
+    ${esc(text)}</div>`;
+  document.body.appendChild(overlay);
+  setTimeout(() => { window.location.href = "/"; }, 2500);
+}
+socketio.on("kicked_user", (data) => {
+  if (data.user === USERNAME) {
+    socketio.disconnect();
+    showKickedOverlay("You have been removed from this room by an admin.");
+  }
+});
+socketio.on("kicked", () => {
+  socketio.disconnect();
+  showKickedOverlay("This room has been closed by an admin.");
+});
+
 // ── Mute ───────────────────────────────────────────────────────────────
 let isMuted = localStorage.getItem("chat_muted") === "1";
 const muteBtn    = document.getElementById("mute-btn");
