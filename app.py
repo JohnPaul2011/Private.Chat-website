@@ -1,7 +1,8 @@
 from flask import render_template, Flask, request, redirect, session, url_for, flash, jsonify, abort
 from flask_socketio import SocketIO, send, join_room, leave_room, emit
+from werkzeug.security import generate_password_hash, check_password_hash
 from colorama import init as init_color
-import time, random, logging, os, re, hmac, hashlib, secrets, base64, struct, datetime
+import time, random, logging, os, re, hmac, hashlib, secrets, base64, struct, datetime, threading
 
 init_color(convert=True, strip=False)
 logging.basicConfig(level=logging.INFO)
@@ -19,10 +20,11 @@ BAD_USERNAMES = {"admin","server","system","moderator","host"}
 rooms        = {}
 room_passwords = {}
 game_rooms   = {}   # code -> {type,diff,state,players,host,scores,poison_idx}
+_state_lock  = threading.Lock()
 
 ADMIN_PASSWORD_HASH = os.environ.get(
     "ADMIN_PASSWORD_HASH",
-    hashlib.sha256(os.environ.get("ADMIN_PASSWORD", "changeme").encode()).hexdigest()
+    generate_password_hash(os.environ.get("ADMIN_PASSWORD", "changeme"))
 )
 TOTP_SECRET = os.environ.get("TOTP_SECRET", "")
 
@@ -31,6 +33,9 @@ LOGIN_MAX, LOGIN_WINDOW, LOGIN_LOCKOUT = 5, 300, 900
 _used_totp_codes = {}
 _msg_counters = {}
 RATE_LIMIT_WINDOW, RATE_LIMIT_MAX = 5, 15
+MAX_ROOMS = 1000
+_create_attempts = {}
+CREATE_MAX, CREATE_WINDOW = 10, 60
 
 
 # ─────────────────────────────── helpers ────────────────────────────────────
@@ -46,12 +51,12 @@ def username_taken(name):
 
 def gen_room_code(n=4):
     while True:
-        c = "".join(random.choices("0123456789", k=n))
+        c = "".join(secrets.choice("0123456789") for _ in range(n))
         if c not in rooms: return c
 
 def gen_game_code():
     while True:
-        c = "".join(random.choices("ABCDEFGHJKLMNPQRSTUVWXYZ23456789", k=6))
+        c = "".join(secrets.choice("ABCDEFGHJKLMNPQRSTUVWXYZ23456789") for _ in range(6))
         if c not in game_rooms: return c
 
 def add_tile(board):
@@ -62,20 +67,23 @@ def client_ip():
     return request.headers.get("X-Forwarded-For", request.remote_addr or "unknown").split(",")[0].strip()
 
 def check_lockout(key):
-    rec = _login_attempts.get(key)
-    return bool(rec and rec["locked_until"] > time.time())
+    with _state_lock:
+        rec = _login_attempts.get(key)
+        return bool(rec and rec["locked_until"] > time.time())
 
 def record_failure(key):
-    now = time.time()
-    rec = _login_attempts.setdefault(key, {"fails": [], "locked_until": 0})
-    rec["fails"] = [t for t in rec["fails"] if now - t < LOGIN_WINDOW]
-    rec["fails"].append(now)
-    if len(rec["fails"]) >= LOGIN_MAX:
-        rec["locked_until"] = now + LOGIN_LOCKOUT
-        rec["fails"] = []
+    with _state_lock:
+        now = time.time()
+        rec = _login_attempts.setdefault(key, {"fails": [], "locked_until": 0})
+        rec["fails"] = [t for t in rec["fails"] if now - t < LOGIN_WINDOW]
+        rec["fails"].append(now)
+        if len(rec["fails"]) >= LOGIN_MAX:
+            rec["locked_until"] = now + LOGIN_LOCKOUT
+            rec["fails"] = []
 
 def record_success(key):
-    _login_attempts.pop(key, None)
+    with _state_lock:
+        _login_attempts.pop(key, None)
 
 def require_admin():
     if not session.get("is_admin"): abort(403)
@@ -103,23 +111,34 @@ def totp_now(secret, step=30, digits=6, t=None):
 def verify_totp(secret, code):
     if not code or not re.match(r"^\d{6}$", code): return False
     now = time.time()
-    for k, exp in list(_used_totp_codes.items()):
-        if exp < now: _used_totp_codes.pop(k, None)
-    for skew in (-1, 0, 1):
-        candidate = totp_now(secret, t=now + skew*30)
-        if hmac.compare_digest(candidate, code):
-            if code in _used_totp_codes: return False
-            _used_totp_codes[code] = now + 90
-            return True
+    with _state_lock:
+        for k, exp in list(_used_totp_codes.items()):
+            if exp < now: _used_totp_codes.pop(k, None)
+        for skew in (-1, 0, 1):
+            candidate = totp_now(secret, t=now + skew*30)
+            if hmac.compare_digest(candidate, code):
+                if code in _used_totp_codes: return False
+                _used_totp_codes[code] = now + 90
+                return True
     return False
 
 def rate_limited(name):
-    now = time.time()
-    bucket = _msg_counters.setdefault(name, [])
-    bucket[:] = [t for t in bucket if now - t < RATE_LIMIT_WINDOW]
-    if len(bucket) >= RATE_LIMIT_MAX: return True
-    bucket.append(now)
-    return False
+    with _state_lock:
+        now = time.time()
+        bucket = _msg_counters.setdefault(name, [])
+        bucket[:] = [t for t in bucket if now - t < RATE_LIMIT_WINDOW]
+        if len(bucket) >= RATE_LIMIT_MAX: return True
+        bucket.append(now)
+        return False
+
+def create_rate_limited(key):
+    with _state_lock:
+        now = time.time()
+        bucket = _create_attempts.setdefault(key, [])
+        bucket[:] = [t for t in bucket if now - t < CREATE_WINDOW]
+        if len(bucket) >= CREATE_MAX: return True
+        bucket.append(now)
+        return False
 
 
 # ─────────────────────────────── chat routes ────────────────────────────────
@@ -136,7 +155,7 @@ def admin_login():
             return render_template("admin_login.html", totp_required=bool(TOTP_SECRET))
         pw = request.form.get("password","")
         code = request.form.get("totp","")
-        pw_ok = hmac.compare_digest(hashlib.sha256(pw.encode()).hexdigest(), ADMIN_PASSWORD_HASH)
+        pw_ok = check_password_hash(ADMIN_PASSWORD_HASH, pw)
         totp_ok = (not TOTP_SECRET) or verify_totp(TOTP_SECRET, code)
         if pw_ok and totp_ok:
             record_success(key)
@@ -230,6 +249,12 @@ def join():
 def create():
     if request.method == "POST":
         check_csrf()
+        if create_rate_limited("create:" + client_ip()):
+            flash("Too many rooms created recently. Try again in a minute.","error")
+            return render_template("create.html")
+        if len(rooms) >= MAX_ROOMS:
+            flash("Server is at capacity. Try again later.","error")
+            return render_template("create.html")
         name = request.form.get("name","").strip()
         code = request.form.get("code","").strip()
         pw   = request.form.get("password","")
@@ -253,8 +278,9 @@ def create():
             flash("Room already exists.","error")
             return render_template("create.html", username=name)
         save_history = request.form.get("save_history") == "1"
-        rooms[code] = {"members":[], "messages":[], "save_history": save_history}
-        room_passwords[code] = pw
+        with _state_lock:
+            rooms[code] = {"members":[], "messages":[], "save_history": save_history}
+            room_passwords[code] = pw
         session.permanent = True
         session["room"] = code
         session["name"] = name

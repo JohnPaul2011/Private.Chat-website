@@ -333,6 +333,22 @@ p { text-align: center; margin-top: 12px; font-size: 13px; color: var(--wa-sub);
 .room-wrapper:-moz-full-screen    { height: 100vh; }
 .room-wrapper:fullscreen          { height: 100vh; }
 
+.e2ee-banner {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  text-align: center;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--muted, #8a8a8a);
+  background: var(--panel-soft, rgba(120,120,120,0.08));
+  padding: 8px 20px;
+  margin: 8px 12px 0;
+  border-radius: 8px;
+}
+.e2ee-banner svg { flex-shrink: 0; opacity: .8; }
+
 .messages {
   flex: 1;
   overflow-y: auto;
