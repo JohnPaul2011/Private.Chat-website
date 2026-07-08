@@ -1,13 +1,19 @@
 from flask import render_template, Flask, request, redirect, session, url_for, flash, jsonify, abort
 from flask_socketio import SocketIO, send, join_room, leave_room, emit
 from werkzeug.security import generate_password_hash, check_password_hash
+from werkzeug.middleware.proxy_fix import ProxyFix
 from colorama import init as init_color
 import time, random, logging, os, re, hmac, hashlib, secrets, base64, struct, datetime, threading
+
+_sysrand = secrets.SystemRandom()
 
 init_color(convert=True, strip=False)
 logging.basicConfig(level=logging.INFO)
 
 app   = Flask(__name__)
+PROXY_HOPS = int(os.environ.get("TRUSTED_PROXY_HOPS", "1"))
+if PROXY_HOPS > 0:
+    app.wsgi_app = ProxyFix(app.wsgi_app, x_for=PROXY_HOPS, x_proto=1, x_host=0)
 app.config['SECRET_KEY'] = os.environ.get("SECRET_KEY") or secrets.token_hex(32)
 app.config['SESSION_COOKIE_HTTPONLY'] = True
 app.config['SESSION_COOKIE_SAMESITE'] = "Lax"
@@ -61,10 +67,10 @@ def gen_game_code():
 
 def add_tile(board):
     empty = [i for i,v in enumerate(board) if v==0]
-    if empty: board[random.choice(empty)] = 2 if random.random()<.9 else 4
+    if empty: board[_sysrand.choice(empty)] = 2 if _sysrand.random()<.9 else 4
 
 def client_ip():
-    return request.headers.get("X-Forwarded-For", request.remote_addr or "unknown").split(",")[0].strip()
+    return request.remote_addr or "unknown"
 
 def check_lockout(key):
     with _state_lock:
@@ -316,6 +322,7 @@ def message(data):
     r    = session.get("room")
     name = session.get("name","")
     if r not in rooms or not name: return
+    if name not in rooms[r]["members"]: return
     if rate_limited(name): return
     ts = time.strftime('%H:%M %p')
     if data.get("type") == "voice":
@@ -329,9 +336,10 @@ def message(data):
         content = {"name":name,"type":"text","message":text,
                    "reply_to":data.get("reply_to"),"timestamp":ts}
     send(content, to=r)
-    rooms[r]["messages"].append(content)
-    if len(rooms[r]["messages"]) > 500:
-        rooms[r]["messages"] = rooms[r]["messages"][-500:]
+    with _state_lock:
+        rooms[r]["messages"].append(content)
+        if len(rooms[r]["messages"]) > 500:
+            rooms[r]["messages"] = rooms[r]["messages"][-500:]
 
 @socketio.on("connect")
 def connect(auth=None):
@@ -339,41 +347,67 @@ def connect(auth=None):
     name = session.get("name")
     if not r or not name or r not in rooms: return
     join_room(r)
-    if name not in rooms[r]["members"]: rooms[r]["members"].append(name)
+    with _state_lock:
+        if name not in rooms[r]["members"]: rooms[r]["members"].append(name)
+        members = list(rooms[r]["members"])
     send({"name":"System","type":"text","message":f"{name} entered the room",
           "timestamp":time.strftime('%H:%M %p')}, to=r)
-    socketio.emit("member_list", rooms[r]["members"], to=r)
+    socketio.emit("member_list", members, to=r)
 
 @socketio.on("disconnect")
 def disconnect():
     r    = session.get("room")
     name = session.get("name")
-    if r and name and r in rooms and name in rooms[r]["members"]:
-        rooms[r]["members"].remove(name)
-        send({"name":"System","type":"text","message":f"{name} left the room",
-              "timestamp":time.strftime('%H:%M %p')}, to=r)
-        socketio.emit("member_list", rooms[r]["members"], to=r)
-        if not rooms[r]["members"]:
-            del rooms[r]; room_passwords.pop(r,None)
+    if r and name and r in rooms:
+        with _state_lock:
+            removed = name in rooms[r]["members"]
+            if removed: rooms[r]["members"].remove(name)
+            empty = removed and not rooms[r]["members"]
+            if empty:
+                del rooms[r]; room_passwords.pop(r,None)
+            members = list(rooms[r]["members"]) if not empty and r in rooms else []
+        if removed:
+            send({"name":"System","type":"text","message":f"{name} left the room",
+                  "timestamp":time.strftime('%H:%M %p')}, to=r)
+            if not empty:
+                socketio.emit("member_list", members, to=r)
+
     gc = session.get("game_code")
     gu = session.get("game_user")
-    if gc and gc in game_rooms and gu:
-        gr = game_rooms[gc]
-        if gu in gr["players"]: gr["players"].remove(gu)
-        if not gr["players"]: del game_rooms[gc]
-        else:
-            emit("g_player_left",{"username":gu,"players":gr["players"]}, to=f"game_{gc}")
+    if gc and gu and gc in game_rooms:
+        with _state_lock:
+            gr = game_rooms.get(gc)
+            if gr and gu in gr["players"]:
+                gr["players"].remove(gu)
+                empty = not gr["players"]
+                if empty: del game_rooms[gc]
+                players = gr["players"][:] if not empty else []
+            else:
+                empty = True; players = []
+        if gr and not empty:
+            emit("g_player_left",{"username":gu,"players":players}, to=f"game_{gc}")
         leave_room(f"game_{gc}")
 
 
 # ─────────────────────────────── game sockets ───────────────────────────────
+def _game_identity(data):
+    """Only the session's own game identity is trusted; the client cannot claim to be anyone else."""
+    code = session.get("game_code")
+    username = session.get("game_user")
+    return code, username
+
+def _in_game(gr, username):
+    return bool(gr) and username in gr["players"]
+
 @socketio.on("g_create")
 def g_create(data):
-    username  = data.get("username","").strip()
+    username  = (data.get("username") or "").strip()
     gtype     = data.get("game","tictactoe")
     diff      = data.get("diff","easy")
-    if not username:
-        emit("g_error",{"msg":"Enter a username"}); return
+    if gtype not in ("tictactoe","2048","poison"):
+        emit("g_error",{"msg":"Unknown game type"}); return
+    if not NAME_RE.match(username):
+        emit("g_error",{"msg":"Username can only contain letters, numbers, - and _ (max 24 chars)"}); return
     code = gen_game_code()
     scores = {username:{"wins":0,"losses":0,"draws":0}}
     poison_idx = -1
@@ -386,13 +420,14 @@ def g_create(data):
         state = {"board":board,"score":0,"turnIndex":0,"players":[username]}
     else:
         cups = {"easy":6,"medium":4,"hard":3}.get(diff,4)
-        poison_idx = random.randint(0,cups-1)
+        poison_idx = _sysrand.randint(0,cups-1)
         state = {"numCups":cups,"alive":[username],"eliminated":[],
                  "pickerIndex":0,"picked":[],"roundNum":1,"gameOver":False,"winner":None}
 
-    game_rooms[code] = {"type":gtype,"diff":diff,"state":state,
-                        "players":[username],"host":username,
-                        "scores":scores,"poison_idx":poison_idx}
+    with _state_lock:
+        game_rooms[code] = {"type":gtype,"diff":diff,"state":state,
+                            "players":[username],"host":username,
+                            "scores":scores,"poison_idx":poison_idx}
     session["game_code"] = code
     session["game_user"] = username
     join_room(f"game_{code}")
@@ -401,79 +436,160 @@ def g_create(data):
 
 @socketio.on("g_join")
 def g_join(data):
-    username = data.get("username","").strip()
-    code     = data.get("code","").strip().upper()
+    username = (data.get("username") or "").strip()
+    code     = (data.get("code") or "").strip().upper()
+    if not NAME_RE.match(username):
+        emit("g_error",{"msg":"Username can only contain letters, numbers, - and _ (max 24 chars)"}); return
     if code not in game_rooms:
         emit("g_error",{"msg":"Game not found — check the code and try again"}); return
-    gr = game_rooms[code]
-    if username not in gr["players"]:
-        gr["players"].append(username)
-        gr["scores"].setdefault(username,{"wins":0,"losses":0,"draws":0})
-        if gr["type"] == "tictactoe" and gr["state"]["players"]["O"] is None:
-            gr["state"]["players"]["O"] = username
-        elif gr["type"] == "2048":
-            if username not in gr["state"]["players"]:
-                gr["state"]["players"].append(username)
-        elif gr["type"] == "poison":
-            if username not in gr["state"]["alive"] and username not in gr["state"]["eliminated"]:
-                gr["state"]["alive"].append(username)
+    with _state_lock:
+        gr = game_rooms[code]
+        if username in gr["players"] and session.get("game_user") != username:
+            emit("g_error",{"msg":"That username is already taken in this game"}); return
+        if username not in gr["players"]:
+            gr["players"].append(username)
+            gr["scores"].setdefault(username,{"wins":0,"losses":0,"draws":0})
+            if gr["type"] == "tictactoe" and gr["state"]["players"]["O"] is None:
+                gr["state"]["players"]["O"] = username
+            elif gr["type"] == "2048":
+                if username not in gr["state"]["players"]:
+                    gr["state"]["players"].append(username)
+            elif gr["type"] == "poison":
+                if username not in gr["state"]["alive"] and username not in gr["state"]["eliminated"]:
+                    gr["state"]["alive"].append(username)
+        snapshot = {"state":gr["state"],"players":gr["players"][:],"scores":dict(gr["scores"]),
+                    "type":gr["type"],"diff":gr["diff"],"host":gr["host"]}
     session["game_code"] = code
     session["game_user"] = username
     join_room(f"game_{code}")
-    emit("g_joined",{"code":code,"state":gr["state"],"players":gr["players"],
-                     "scores":gr["scores"],"type":gr["type"],
-                     "diff":gr["diff"],"host":gr["host"]})
-    emit("g_player_joined",{"username":username,"players":gr["players"],
-                            "state":gr["state"],"scores":gr["scores"]},
+    emit("g_joined",{"code":code, **snapshot})
+    emit("g_player_joined",{"username":username,"players":snapshot["players"],
+                            "state":snapshot["state"],"scores":snapshot["scores"]},
          to=f"game_{code}", include_self=False)
 
 @socketio.on("g_move")
 def g_move(data):
-    code = session.get("game_code") or data.get("code","")
-    if code not in game_rooms: return
+    code, username = _game_identity(data)
+    if not code or code not in game_rooms: return
     gr = game_rooms[code]
-    gr["state"] = data["state"]
-    emit("g_state",{"state":data["state"],"scores":gr["scores"],"player":data.get("player","")},
-         to=f"game_{code}", include_self=False)
+    if not _in_game(gr, username): return
+
+    if gr["type"] == "tictactoe":
+        new_board = data.get("state", {}).get("board")
+        old_state = gr["state"]
+        old_board = old_state["board"]
+        turn      = old_state["turn"]
+        players   = old_state["players"]
+        if old_state.get("winner"): return                    # game already over
+        if players.get(turn) != username: return               # not your turn
+        if not isinstance(new_board, list) or len(new_board) != 9: return
+        # exactly one empty cell may flip to the current player's symbol
+        diffs = [i for i in range(9) if old_board[i] != new_board[i]]
+        if len(diffs) != 1: return
+        i = diffs[0]
+        if old_board[i] is not None or new_board[i] != turn: return
+        for j in range(9):
+            if j != i and new_board[j] != old_board[j]: return
+
+        winner = _tictactoe_winner(new_board)
+        gr["state"] = {**old_state, "board": new_board, "winner": winner,
+                        "turn": ("O" if turn == "X" else "X")}
+        emit("g_state",{"state":gr["state"],"scores":gr["scores"],"player":username},
+             to=f"game_{code}", include_self=False)
+        if winner:
+            winner_username = None if winner == "draw" else players.get(winner)
+            _apply_game_result(gr, winner_username)
+            emit("g_result",{"winner":(winner_username or "draw"),
+                             "scores":gr["scores"]}, to=f"game_{code}")
+    else:
+        # 2048 is single-player-per-board; only the state owner may push a move
+        if username not in gr["state"].get("players",[]): return
+        gr["state"] = data.get("state", gr["state"])
+        emit("g_state",{"state":gr["state"],"scores":gr["scores"],"player":username},
+             to=f"game_{code}", include_self=False)
+
+def _tictactoe_winner(board):
+    lines = [(0,1,2),(3,4,5),(6,7,8),(0,3,6),(1,4,7),(2,5,8),(0,4,8),(2,4,6)]
+    for a,b,c in lines:
+        if board[a] and board[a]==board[b]==board[c]:
+            return board[a]
+    if all(v is not None for v in board):
+        return "draw"
+    return None
+
+def _apply_game_result(gr, winner_username):
+    if winner_username:
+        gr["scores"].setdefault(winner_username,{"wins":0,"losses":0,"draws":0})["wins"] += 1
+        for p in gr["players"]:
+            if p != winner_username:
+                gr["scores"].setdefault(p,{"wins":0,"losses":0,"draws":0})["losses"] += 1
+    else:
+        for p in gr["players"]:
+            gr["scores"].setdefault(p,{"wins":0,"losses":0,"draws":0})["draws"] += 1
 
 @socketio.on("g_start")
 def g_start(data):
-    code = session.get("game_code") or data.get("code","")
-    if code not in game_rooms: return
+    code, username = _game_identity(data)
+    if not code or code not in game_rooms: return
     gr = game_rooms[code]
+    if not _in_game(gr, username): return
     emit("g_started",{"state":gr["state"],"scores":gr["scores"],
                        "type":gr["type"],"diff":gr["diff"]},
          to=f"game_{code}")
 
 @socketio.on("g_result")
 def g_result(data):
-    code = session.get("game_code") or data.get("code","")
-    if code not in game_rooms: return
+    # Only used by 2048 (client computes game-over locally); tictactoe/poison results
+    # are computed server-side and never trust this event's "winner" value.
+    code, username = _game_identity(data)
+    if not code or code not in game_rooms: return
     gr = game_rooms[code]
-    winner = data.get("winner")
-    if winner and winner != "draw":
-        gr["scores"].setdefault(winner,{"wins":0,"losses":0,"draws":0})["wins"] += 1
-        for p in gr["players"]:
-            if p != winner:
-                gr["scores"].setdefault(p,{"wins":0,"losses":0,"draws":0})["losses"] += 1
-    elif winner == "draw":
-        for p in gr["players"]:
-            gr["scores"].setdefault(p,{"wins":0,"losses":0,"draws":0})["draws"] += 1
-    emit("g_result",{"winner":winner,"scores":gr["scores"]}, to=f"game_{code}")
+    if not _in_game(gr, username) or gr["type"] != "2048": return
+    claimed_winner = data.get("winner")
+    if claimed_winner not in (None, "draw", username): return  # can only report own result
+    with _state_lock:
+        _apply_game_result(gr, None if claimed_winner in (None,"draw") else claimed_winner)
+    emit("g_result",{"winner":claimed_winner, "scores":gr["scores"]}, to=f"game_{code}")
 
 @socketio.on("g_vote")
 def g_vote(data):
-    code = session.get("game_code") or data.get("code","")
-    if code not in game_rooms: return
+    code, username = _game_identity(data)
+    if not code or code not in game_rooms or not username: return
     gr = game_rooms[code]
-    votes = gr.setdefault("votes", set())
-    username = session.get("game_user","")
-    votes.add(username)
-    total = len(gr["players"])
-    count = len(votes)
+    if not _in_game(gr, username): return
+    with _state_lock:
+        votes = gr.setdefault("votes", set())
+        votes.add(username)
+        total = len(gr["players"])
+        count = len(votes)
     emit("g_vote_update",{"count":count,"total":total}, to=f"game_{code}")
     if count >= total:
-        gr["votes"] = set()
+        with _state_lock:
+            gr["votes"] = set()
+            if gr["type"] == "tictactoe":
+                old_p = gr["state"]["players"]
+                gr["state"] = {"board":[None]*9,"turn":"X","winner":None,
+                               "players":{"X":old_p["O"],"O":old_p["X"]},
+                               "round": gr["state"].get("round",1)+1}
+            elif gr["type"] == "2048":
+                board=[0]*16; add_tile(board); add_tile(board)
+                gr["state"] = {"board":board,"score":0,"turnIndex":0,"players":gr["players"][:]}
+            elif gr["type"] == "poison":
+                cups = gr["state"]["numCups"]
+                gr["poison_idx"] = _sysrand.randint(0, cups-1)
+                gr["state"] = {"numCups":cups,"alive":gr["players"][:],"eliminated":[],
+                               "pickerIndex":0,"picked":[],"roundNum":1,
+                               "gameOver":False,"winner":None,"difficulty":gr["diff"]}
+            new_state = gr["state"]
+        emit("g_restart",{"state":new_state,"scores":gr["scores"]}, to=f"game_{code}")
+
+@socketio.on("g_restart")
+def g_restart(data):
+    code, username = _game_identity(data)
+    if not code or code not in game_rooms: return
+    gr = game_rooms[code]
+    if not _in_game(gr, username): return
+    with _state_lock:
         if gr["type"] == "tictactoe":
             old_p = gr["state"]["players"]
             gr["state"] = {"board":[None]*9,"turn":"X","winner":None,
@@ -482,80 +598,76 @@ def g_vote(data):
         elif gr["type"] == "2048":
             board=[0]*16; add_tile(board); add_tile(board)
             gr["state"] = {"board":board,"score":0,"turnIndex":0,"players":gr["players"][:]}
-        elif gr["type"] == "poison":
-            cups = gr["state"]["numCups"]
-            gr["poison_idx"] = random.randint(0, cups-1)
-            gr["state"] = {"numCups":cups,"alive":gr["players"][:],"eliminated":[],
-                           "pickerIndex":0,"picked":[],"roundNum":1,
-                           "gameOver":False,"winner":None,"difficulty":gr["diff"]}
-        emit("g_restart",{"state":gr["state"],"scores":gr["scores"]}, to=f"game_{code}")
-
-@socketio.on("g_restart")
-def g_restart(data):
-    code = session.get("game_code") or data.get("code","")
-    if code not in game_rooms: return
-    gr = game_rooms[code]
-    if gr["type"] == "tictactoe":
-        old_p = gr["state"]["players"]
-        gr["state"] = {"board":[None]*9,"turn":"X","winner":None,
-                       "players":{"X":old_p["O"],"O":old_p["X"]},
-                       "round": gr["state"].get("round",1)+1}
-    elif gr["type"] == "2048":
-        board=[0]*16; add_tile(board); add_tile(board)
-        gr["state"] = {"board":board,"score":0,"turnIndex":0,"players":gr["players"][:]}
-    emit("g_restart",{"state":gr["state"],"scores":gr["scores"]}, to=f"game_{code}")
+        new_state = gr["state"]
+    emit("g_restart",{"state":new_state,"scores":gr["scores"]}, to=f"game_{code}")
 
 @socketio.on("g_poison_pick")
 def g_poison_pick(data):
-    code     = session.get("game_code") or data.get("code","")
-    username = session.get("game_user") or data.get("username","")
-    cup      = data.get("cup")
-    if code not in game_rooms: return
-    gr    = game_rooms[code]
-    st    = gr["state"]
-    poisoned = (cup == gr["poison_idx"])
-    picked   = st["picked"] + [cup]
-    alive    = list(st["alive"])
-    elim     = list(st["eliminated"])
-    pi       = st["pickerIndex"]
-    rnum     = st["roundNum"]
-    game_over= False; winner=None
+    code, username = _game_identity(data)
+    cup = data.get("cup")
+    if not code or code not in game_rooms or not username: return
+    gr = game_rooms[code]
+    if not _in_game(gr, username): return
 
-    if poisoned:
-        elim.append(username)
-        alive = [p for p in alive if p != username]
-        if len(alive) <= 1:
-            game_over = True; winner = alive[0] if alive else None
-            if winner:
-                gr["scores"].setdefault(winner,{"wins":0,"losses":0,"draws":0})["wins"]+=1
+    with _state_lock:
+        st = gr["state"]
+        if st.get("gameOver"): return
+        if not isinstance(cup, int) or not (0 <= cup < st["numCups"]) or cup in st["picked"]: return
+        alive = list(st["alive"])
+        if username not in alive: return
+        expected_picker = alive[st["pickerIndex"] % len(alive)]
+        if expected_picker != username: return  # not your turn
+
+        poisoned = (cup == gr["poison_idx"])
+        picked   = st["picked"] + [cup]
+        elim     = list(st["eliminated"])
+        pi       = st["pickerIndex"]
+        rnum     = st["roundNum"]
+        game_over= False; winner=None
+
+        if poisoned:
+            elim.append(username)
+            alive = [p for p in alive if p != username]
+            if len(alive) <= 1:
+                game_over = True; winner = alive[0] if alive else None
+                if winner:
+                    gr["scores"].setdefault(winner,{"wins":0,"losses":0,"draws":0})["wins"]+=1
+            else:
+                rnum+=1; picked=[]; pi=0
+                gr["poison_idx"] = _sysrand.randint(0, st["numCups"]-1)
         else:
-            rnum+=1; picked=[]; pi=0
-            gr["poison_idx"] = random.randint(0, st["numCups"]-1)
-    else:
-        pi = (st["pickerIndex"]+1) % len(alive)
-        remaining = [i for i in range(st["numCups"]) if i not in picked]
-        if len(remaining)==1: gr["poison_idx"] = remaining[0]
+            pi = (st["pickerIndex"]+1) % len(alive)
+            remaining = [i for i in range(st["numCups"]) if i not in picked]
+            if len(remaining)==1: gr["poison_idx"] = remaining[0]
 
-    new_state = {**st,"alive":alive,"eliminated":elim,
-                 "pickerIndex":pi,"picked":picked,
-                 "roundNum":rnum,"gameOver":game_over,"winner":winner}
-    gr["state"] = new_state
+        new_state = {**st,"alive":alive,"eliminated":elim,
+                     "pickerIndex":pi,"picked":picked,
+                     "roundNum":rnum,"gameOver":game_over,"winner":winner}
+        gr["state"] = new_state
+        scores = dict(gr["scores"])
+
     emit("g_poison_result",{"cup":cup,"player":username,"poisoned":poisoned,
-                            "state":new_state,"scores":gr["scores"]},
+                            "state":new_state,"scores":scores},
          to=f"game_{code}")
 
 @socketio.on("g_leave")
 def g_leave(data):
-    code     = session.get("game_code") or data.get("code","")
-    username = session.get("game_user") or data.get("username","")
-    if code in game_rooms:
-        gr = game_rooms[code]
-        if username in gr["players"]: gr["players"].remove(username)
-        if not gr["players"]: del game_rooms[code]
-        else:
-            emit("g_player_left",{"username":username,"players":gr["players"]},
+    code, username = _game_identity(data)
+    if code and username and code in game_rooms:
+        with _state_lock:
+            gr = game_rooms.get(code)
+            if gr and username in gr["players"]:
+                gr["players"].remove(username)
+                empty = not gr["players"]
+                if empty: del game_rooms[code]
+                players = gr["players"][:] if not empty else []
+            else:
+                gr = None; empty = True; players = []
+        if gr and not empty:
+            emit("g_player_left",{"username":username,"players":players},
                  to=f"game_{code}", include_self=False)
-    leave_room(f"game_{code}")
+    if code:
+        leave_room(f"game_{code}")
     session.pop("game_code",None); session.pop("game_user",None)
 
 
