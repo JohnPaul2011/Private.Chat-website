@@ -514,6 +514,13 @@ def report_latency(data):
     if not isinstance(ms, (int, float)) or ms < 0 or ms > 60000: return
     socketio.emit("member_latency", {"name": name, "ms": round(ms)}, to=r)
 
+@socketio.on("typing")
+def typing(data):
+    r    = session.get("room")
+    name = session.get("name","")
+    if r not in rooms or not name or name not in rooms[r]["members"]: return
+    socketio.emit("typing", {"name": name, "active": bool(data.get("active"))}, to=r, include_self=False)
+
 @socketio.on("mark_seen")
 def mark_seen(data):
     r    = session.get("room")

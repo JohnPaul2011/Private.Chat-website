@@ -75,6 +75,9 @@
     </button>
   </div>
 
+  <!-- ── Typing indicator ── -->
+  <div id="typing-indicator" class="typing-indicator hidden" style="font-size:12px;opacity:.65;padding:2px 16px;min-height:16px;"></div>
+
   <!-- ── Input bar ── -->
   <div class="inputs">
     <button id="attach-btn" class="input-icon-btn" title="Send a file or photo">
@@ -230,6 +233,10 @@ function renderMembers() {
 
 socketio.on("member_list", (list) => {
   currentMembers = list;
+  for (const name of Array.from(typingUsers)) {
+    if (!list.includes(name)) { typingUsers.delete(name); clearTimeout(typingClearTimers[name]); }
+  }
+  renderTyping();
   renderMembers();
 });
 
@@ -550,10 +557,58 @@ async function sendMessage() {
   if (replyTo) replyPayload = { name: replyTo.name, message: await encryptText(replyTo.message) };
   socketio.emit("message",{type:"text",data:ciphertext,reply_to:replyPayload});
   msgInput.value=""; cancelReply(); msgInput.focus();
+  stopTyping();
 }
 sendBtn.addEventListener("click", sendMessage);
 msgInput.addEventListener("keypress",(e)=>{ if(e.key==="Enter"){e.preventDefault();sendMessage();} });
 leaveBtn.addEventListener("click",()=>{ window.location.href="/logout"; });
+
+// ── Typing indicator ──────────────────────────────────────────────────
+const typingBar = document.getElementById("typing-indicator");
+let typingActive = false;
+let typingStopTimer = null;
+
+function stopTyping() {
+  if (typingActive) { typingActive = false; socketio.emit("typing", { active: false }); }
+  clearTimeout(typingStopTimer);
+}
+msgInput.addEventListener("input", () => {
+  if (msgInput.value.trim() === "") { stopTyping(); return; }
+  if (!typingActive) { typingActive = true; socketio.emit("typing", { active: true }); }
+  clearTimeout(typingStopTimer);
+  typingStopTimer = setTimeout(stopTyping, 2500);
+});
+
+const typingUsers = new Set();
+let typingClearTimers = {};
+socketio.on("typing", (data) => {
+  const name = data.name;
+  if (data.active) {
+    typingUsers.add(name);
+    clearTimeout(typingClearTimers[name]);
+    typingClearTimers[name] = setTimeout(() => { typingUsers.delete(name); renderTyping(); }, 4000);
+  } else {
+    typingUsers.delete(name);
+    clearTimeout(typingClearTimers[name]);
+  }
+  renderTyping();
+});
+function renderTyping() {
+  const names = Array.from(typingUsers);
+  if (names.length === 0) {
+    typingBar.textContent = "";
+    typingBar.classList.add("hidden");
+  } else if (names.length === 1) {
+    typingBar.textContent = `${names[0]} is typing…`;
+    typingBar.classList.remove("hidden");
+  } else if (names.length === 2) {
+    typingBar.textContent = `${names[0]} and ${names[1]} are typing…`;
+    typingBar.classList.remove("hidden");
+  } else {
+    typingBar.textContent = `${names.length} people are typing…`;
+    typingBar.classList.remove("hidden");
+  }
+}
 
 // ── Voice recording ────────────────────────────────────────────────────
 const VOICE_BITRATE = 32000; // 32kbps mono Opus — clear voice quality, small + predictable size
