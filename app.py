@@ -499,6 +499,20 @@ def file_chunk_end(data):
     }, to=r)
     _push_admin_update()
 
+@socketio.on("latency_ping")
+def latency_ping(data):
+    # simple RTT echo so the client can measure its own round-trip time; nothing stored server-side
+    emit("latency_pong", {"t": data.get("t")})
+
+@socketio.on("report_latency")
+def report_latency(data):
+    r    = session.get("room")
+    name = session.get("name","")
+    if r not in rooms or not name or name not in rooms[r]["members"]: return
+    ms = data.get("ms")
+    if not isinstance(ms, (int, float)) or ms < 0 or ms > 60000: return
+    socketio.emit("member_latency", {"name": name, "ms": round(ms)}, to=r)
+
 @socketio.on("mark_seen")
 def mark_seen(data):
     r    = session.get("room")

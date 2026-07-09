@@ -204,16 +204,51 @@ socketio.on("message", async (data) => {
   if (data.name !== USERNAME && !isMuted) playSound();
 });
 
-socketio.on("member_list", (list) => {
-  document.getElementById("members-count").textContent = list.length;
+let currentMembers = [];
+const memberLatency = {};   // username -> ms
+
+function renderMembers() {
+  document.getElementById("members-count").textContent = currentMembers.length;
   const ml = document.getElementById("members-list");
-  ml.innerHTML = list.map(m =>
-    `<div class="members-list-item">
+  const sorted = [...currentMembers].sort((a, b) => {
+    const la = memberLatency[a], lb = memberLatency[b];
+    if (la == null && lb == null) return 0;
+    if (la == null) return 1;
+    if (lb == null) return -1;
+    return la - lb;
+  });
+  ml.innerHTML = sorted.map(m => {
+    const ms = memberLatency[m];
+    const latencyHtml = ms == null ? "" :
+      `<span class="member-latency" style="opacity:.6;font-size:11px;margin-left:auto;">${ms}ms</span>`;
+    return `<div class="members-list-item" style="display:flex;align-items:center;gap:6px;">
       <span class="member-dot"></span>
       <span class="member-name${m===USERNAME?" member-you":""}">${esc(m)}${m===USERNAME?" (you)":""}</span>
-    </div>`
-  ).join("");
+      ${latencyHtml}
+    </div>`;
+  }).join("");
+}
+
+socketio.on("member_list", (list) => {
+  currentMembers = list;
+  renderMembers();
 });
+
+socketio.on("member_latency", (data) => {
+  memberLatency[data.name] = data.ms;
+  renderMembers();
+});
+
+// ── Network latency measurement (informational only — display, not priority) ──
+socketio.on("latency_pong", (data) => {
+  const ms = Date.now() - data.t;
+  socketio.emit("report_latency", { ms });
+});
+function pingLatency() {
+  if (socketio.connected) socketio.emit("latency_ping", { t: Date.now() });
+}
+socketio.on("connect", () => { pingLatency(); });
+setInterval(pingLatency, 10000);
 
 // ── Kicked notices ───────────────────────────────────────────────────────
 function showKickedOverlay(text) {
