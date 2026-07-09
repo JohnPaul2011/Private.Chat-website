@@ -146,21 +146,19 @@ async function decryptText(payload) {
   } catch (e) { return payload; }
 }
 
-// ── File/photo transfer: encrypt raw bytes first, THEN gzip the ciphertext ──
-async function encryptBytesThenGzip(bytes) {
+// ── File/photo transfer: gzip the raw bytes FIRST, then encrypt the compressed result ──
+async function gzipThenEncryptBytes(bytes) {
   await keyReady;
+  const compressed = pako.gzip(bytes, { level: 9 });
   const iv = crypto.getRandomValues(new Uint8Array(12));
-  const ct = await crypto.subtle.encrypt({name:"AES-GCM", iv}, cryptoKey, bytes);
-  const compressed = pako.gzip(new Uint8Array(ct), { level: 9 });
-  return bufToB64(iv) + ":" + bufToB64(compressed.buffer);
+  const ct = await crypto.subtle.encrypt({name:"AES-GCM", iv}, cryptoKey, compressed);
+  return bufToB64(iv) + ":" + bufToB64(ct);
 }
-async function gunzipThenDecryptBytes(payload) {
+async function decryptThenGunzipBytes(payload) {
   await keyReady;
-  const [ivB64, gzB64] = payload.split(":");
-  const compressed = b64ToBuf(gzB64);
-  const ct = pako.ungzip(compressed);
-  const pt = await crypto.subtle.decrypt({name:"AES-GCM", iv:b64ToBuf(ivB64)}, cryptoKey, ct);
-  return new Uint8Array(pt);
+  const [ivB64, ctB64] = payload.split(":");
+  const pt = await crypto.subtle.decrypt({name:"AES-GCM", iv:b64ToBuf(ivB64)}, cryptoKey, b64ToBuf(ctB64));
+  return pako.ungzip(new Uint8Array(pt));
 }
 // ── end E2E encryption ──
 
@@ -363,14 +361,20 @@ async function createFileMessage(data) {
 
   let bodyHtml = `<div class="username">${esc(data.name)}</div><div class="message">📎 ${esc(data.filename)}</div>`;
   try {
-    const bytes = await gunzipThenDecryptBytes(data.data);
+    const bytes = await decryptThenGunzipBytes(data.data);
     const blob = new Blob([bytes], { type: data.mime || "application/octet-stream" });
     const url = URL.createObjectURL(blob);
     if ((data.mime || "").startsWith("image/")) {
+      const imgId = "img-" + Math.random().toString(36).slice(2);
       bodyHtml = `<div class="username">${esc(data.name)}</div>
-        <a href="${url}" download="${esc(data.filename)}">
-          <img src="${url}" alt="${esc(data.filename)}" style="max-width:220px;max-height:220px;border-radius:8px;display:block;margin-top:4px;">
+        <a href="${url}" download="${esc(data.filename)}" class="file-image-wrap" style="display:block;max-width:220px;margin-top:4px;">
+          <img id="${imgId}" alt="${esc(data.filename)}" class="file-image-thumb"
+               style="max-width:220px;max-height:220px;border-radius:8px;display:block;
+                      filter:blur(10px);transform:scale(1.03);
+                      transition:filter .35s ease, transform .35s ease;">
         </a>`;
+      // build a tiny low-res preview first, then swap to the full image and reveal it
+      setTimeout(() => buildThumbThenReveal(imgId, url), 0);
     } else {
       bodyHtml = `<div class="username">${esc(data.name)}</div>
         <a href="${url}" download="${esc(data.filename)}" style="display:flex;align-items:center;gap:6px;text-decoration:none;color:inherit;">
@@ -394,6 +398,33 @@ async function createFileMessage(data) {
   messagesDiv.appendChild(div);
   if (!isOwn && data.id) observeForSeen(div);
   scrollToBottom();
+}
+
+// show a tiny blurred low-res thumbnail immediately, then swap in the full image and unblur/scale it in
+function buildThumbThenReveal(imgId, fullUrl) {
+  const imgEl = document.getElementById(imgId);
+  if (!imgEl) return;
+  const probe = new Image();
+  probe.onload = () => {
+    const THUMB_W = 24;
+    const scale = THUMB_W / probe.naturalWidth;
+    const canvas = document.createElement("canvas");
+    canvas.width = THUMB_W;
+    canvas.height = Math.max(1, Math.round(probe.naturalHeight * scale));
+    canvas.getContext("2d").drawImage(probe, 0, 0, canvas.width, canvas.height);
+    imgEl.src = canvas.toDataURL("image/jpeg", 0.5);   // tiny blurred placeholder, shown instantly
+
+    const full = new Image();
+    full.onload = () => {
+      requestAnimationFrame(() => {
+        imgEl.src = fullUrl;
+        imgEl.style.filter = "blur(0)";
+        imgEl.style.transform = "scale(1)";
+      });
+    };
+    full.src = fullUrl;
+  };
+  probe.src = fullUrl;
 }
 
 // ── Read receipts ────────────────────────────────────────────────────────
@@ -527,7 +558,7 @@ fileInput.addEventListener("change", async () => {
   attachBtn.disabled = true;
   try {
     const bytes = new Uint8Array(await file.arrayBuffer());
-    const payload = await encryptBytesThenGzip(bytes);
+    const payload = await gzipThenEncryptBytes(bytes);
     socketio.emit("message", {
       type: "file", data: payload,
       filename: file.name, mime: file.type || "application/octet-stream"
