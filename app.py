@@ -397,8 +397,9 @@ def message(data):
     mtype = data.get("type")
     if mtype == "voice":
         audio = data.get("audio","")
-        if not isinstance(audio, str) or len(audio) > 3_000_000: return
-        content = {"id":mid,"name":name,"type":"voice","audio":audio,
+        mime  = str(data.get("mime",""))[:100]
+        if not isinstance(audio, str) or len(audio) > 800_000: return
+        content = {"id":mid,"name":name,"type":"voice","audio":audio,"mime":mime,
                    "duration":data.get("duration",0),"timestamp":ts}
     elif mtype == "file":
         payload = data.get("data","")

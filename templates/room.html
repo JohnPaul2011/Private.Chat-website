@@ -191,8 +191,7 @@ socketio.on("disconnect", () => {
 
 socketio.on("message", async (data) => {
   if (data.type === "voice") {
-    const audio = await decryptText(data.audio);
-    createVoiceMessage({...data, audio});
+    await createVoiceMessage(data);
   } else if (data.type === "file") {
     createFileMessage(data);
   } else {
@@ -360,11 +359,19 @@ function createMessage(name, msg, timestamp, replyData, mid) {
   scrollToBottom();
 }
 
-function createVoiceMessage(data) {
+async function createVoiceMessage(data) {
   const isOwn = data.name === USERNAME;
   const div = document.createElement("div");
   div.className = isOwn ? "right-message-box" : "left-message-box";
   if (data.id) div.dataset.mid = data.id;
+
+  let audioSrc = "";
+  try {
+    const bytes = await decryptThenGunzipBytes(data.audio);
+    const blob = new Blob([bytes], { type: data.mime || "audio/webm" });
+    audioSrc = URL.createObjectURL(blob);
+  } catch (e) { /* leave audioSrc empty, player will just show broken */ }
+
   div.innerHTML = `
     <div class="username">${esc(data.name)}</div>
     <div class="voice-player">
@@ -372,7 +379,7 @@ function createVoiceMessage(data) {
         <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
         <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
       </svg>
-      <audio controls src="${data.audio}" preload="metadata"></audio>
+      <audio controls src="${audioSrc}" preload="metadata"></audio>
     </div>
     <div class="msg-footer">
       <span class="timestamp">${esc(data.timestamp)}</span>
@@ -549,15 +556,17 @@ msgInput.addEventListener("keypress",(e)=>{ if(e.key==="Enter"){e.preventDefault
 leaveBtn.addEventListener("click",()=>{ window.location.href="/logout"; });
 
 // ── Voice recording ────────────────────────────────────────────────────
+const VOICE_BITRATE = 32000; // 32kbps mono Opus — clear voice quality, small + predictable size
 let mediaRecorder=null, audioChunks=[], isRecording=false, recordTimer=null, recordStart=0;
 const micBtn = document.getElementById("mic-btn");
 micBtn.addEventListener("click",()=>{ isRecording ? stopRecording() : startRecording(); });
 async function startRecording() {
   try {
-    const stream = await navigator.mediaDevices.getUserMedia({audio:true});
+    const stream = await navigator.mediaDevices.getUserMedia({audio:{channelCount:1}});
     audioChunks=[];
-    const mime=MediaRecorder.isTypeSupported("audio/webm")?"audio/webm":"audio/ogg";
-    mediaRecorder=new MediaRecorder(stream,{mimeType:mime});
+    const mime=MediaRecorder.isTypeSupported("audio/webm;codecs=opus")?"audio/webm;codecs=opus"
+             : MediaRecorder.isTypeSupported("audio/webm")?"audio/webm":"audio/ogg";
+    mediaRecorder=new MediaRecorder(stream,{mimeType:mime, audioBitsPerSecond:VOICE_BITRATE});
     mediaRecorder.ondataavailable=e=>{if(e.data.size>0)audioChunks.push(e.data);};
     mediaRecorder.onstop=sendVoice;
     mediaRecorder.start(200); isRecording=true; recordStart=Date.now();
@@ -570,14 +579,15 @@ function stopRecording() {
   mediaRecorder.stop(); mediaRecorder.stream.getTracks().forEach(t=>t.stop());
   isRecording=false; micBtn.classList.remove("recording");
 }
-function sendVoice() {
-  const blob=new Blob(audioChunks,{type:audioChunks[0]?.type||"audio/webm"});
-  const reader=new FileReader();
-  reader.onload=async ()=>{
-    const ciphertext = await encryptText(reader.result);
-    socketio.emit("message",{type:"voice",audio:ciphertext,duration:Math.round((Date.now()-recordStart)/1000)});
-  };
-  reader.readAsDataURL(blob);
+async function sendVoice() {
+  const mime = audioChunks[0]?.type || "audio/webm";
+  const blob = new Blob(audioChunks, { type: mime });
+  const bytes = new Uint8Array(await blob.arrayBuffer());
+  const payload = await gzipThenEncryptBytes(bytes);   // same compress-then-encrypt pipeline as files
+  socketio.emit("message", {
+    type: "voice", audio: payload, mime,
+    duration: Math.round((Date.now() - recordStart) / 1000)
+  });
 }
 
 // ── File / photo send (chunked, so a big file doesn't block in one payload) ──
@@ -732,8 +742,7 @@ document.addEventListener("fullscreenchange",()=>{
   const history = JSON.parse(document.getElementById("history-data").textContent);
   for (const msg of history) {
     if (msg.type === "voice") {
-      const audio = await decryptText(msg.audio);
-      createVoiceMessage({...msg, audio});
+      await createVoiceMessage(msg);
     } else if (msg.type === "file") {
       await createFileMessage(msg);
     } else {
