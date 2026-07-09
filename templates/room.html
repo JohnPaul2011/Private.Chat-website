@@ -353,12 +353,7 @@ function createVoiceMessage(data) {
   scrollToBottom();
 }
 
-async function createFileMessage(data) {
-  const isOwn = data.name === USERNAME;
-  const div = document.createElement("div");
-  div.className = isOwn ? "right-message-box" : "left-message-box";
-  if (data.id) div.dataset.mid = data.id;
-
+async function renderFileBody(div, data) {
   let bodyHtml = `<div class="username">${esc(data.name)}</div><div class="message">📎 ${esc(data.filename)}</div>`;
   try {
     const bytes = await decryptThenGunzipBytes(data.data);
@@ -373,7 +368,6 @@ async function createFileMessage(data) {
                       filter:blur(10px);transform:scale(1.03);
                       transition:filter .35s ease, transform .35s ease;">
         </a>`;
-      // build a tiny low-res preview first, then swap to the full image and reveal it
       setTimeout(() => buildThumbThenReveal(imgId, url), 0);
     } else {
       bodyHtml = `<div class="username">${esc(data.name)}</div>
@@ -385,6 +379,7 @@ async function createFileMessage(data) {
     bodyHtml += `<div style="opacity:.7;font-size:12px">[unable to decrypt file]</div>`;
   }
 
+  const isOwn = data.name === USERNAME;
   div.innerHTML = `${bodyHtml}
     <div class="msg-footer">
       <span class="timestamp">${esc(data.timestamp)}</span>
@@ -395,6 +390,14 @@ async function createFileMessage(data) {
       e.stopPropagation(); showSeenInfo(data.id);
     });
   }
+}
+
+async function createFileMessage(data) {
+  const isOwn = data.name === USERNAME;
+  const div = document.createElement("div");
+  div.className = isOwn ? "right-message-box" : "left-message-box";
+  if (data.id) div.dataset.mid = data.id;
+  await renderFileBody(div, data);
   messagesDiv.appendChild(div);
   if (!isOwn && data.id) observeForSeen(div);
   scrollToBottom();
@@ -542,8 +545,9 @@ function sendVoice() {
   reader.readAsDataURL(blob);
 }
 
-// ── File / photo send ──────────────────────────────────────────────────
+// ── File / photo send (chunked, so a big file doesn't block in one payload) ──
 const MAX_FILE_BYTES = 5 * 1024 * 1024; // 5MB cap
+const CHUNK_CHARS     = 180000;         // ~180KB of base64 text per chunk
 const attachBtn  = document.getElementById("attach-btn");
 const fileInput  = document.getElementById("file-input");
 attachBtn.addEventListener("click", () => fileInput.click());
@@ -557,18 +561,119 @@ fileInput.addEventListener("change", async () => {
   }
   attachBtn.disabled = true;
   try {
-    const bytes = new Uint8Array(await file.arrayBuffer());
-    const payload = await gzipThenEncryptBytes(bytes);
-    socketio.emit("message", {
-      type: "file", data: payload,
-      filename: file.name, mime: file.type || "application/octet-stream"
-    });
+    await sendFileChunked(file);
   } catch (e) {
     alert("Failed to send file.");
   } finally {
     attachBtn.disabled = false;
   }
 });
+
+function genTransferId() {
+  return (crypto.randomUUID ? crypto.randomUUID() : "t" + Date.now() + Math.random().toString(36).slice(2))
+    .replace(/[^A-Za-z0-9_-]/g, "");
+}
+
+async function sendFileChunked(file) {
+  const transferId = genTransferId();
+  const ts = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+
+  // Optimistic local render: sender already has the original file, no need to
+  // wait for the round trip or re-decrypt their own upload.
+  const localUrl = URL.createObjectURL(file);
+  const div = document.createElement("div");
+  div.className = "right-message-box";
+  div.dataset.mid = transferId;
+  const isImage = (file.type || "").startsWith("image/");
+  div.innerHTML = `
+    <div class="username">${esc(USERNAME)}</div>
+    ${isImage
+      ? `<a href="${localUrl}" download="${esc(file.name)}" style="display:block;max-width:220px;margin-top:4px;">
+           <img src="${localUrl}" style="max-width:220px;max-height:220px;border-radius:8px;display:block;">
+         </a>`
+      : `<a href="${localUrl}" download="${esc(file.name)}" style="display:flex;align-items:center;gap:6px;text-decoration:none;color:inherit;">
+           📎 <span>${esc(file.name)}</span>
+         </a>`}
+    <div class="msg-footer">
+      <span class="timestamp">${esc(ts)}</span>
+      <span class="file-progress" style="opacity:.6;font-size:11px;margin-left:6px;">sending… 0%</span>
+    </div>`;
+  messagesDiv.appendChild(div);
+  scrollToBottom();
+
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  const payload = await gzipThenEncryptBytes(bytes);
+  const totalChunks = Math.max(1, Math.ceil(payload.length / CHUNK_CHARS));
+
+  socketio.emit("file_chunk_start", {
+    transfer_id: transferId, filename: file.name,
+    mime: file.type || "application/octet-stream", total_chunks: totalChunks
+  });
+  for (let i = 0; i < totalChunks; i++) {
+    const chunk = payload.slice(i * CHUNK_CHARS, (i + 1) * CHUNK_CHARS);
+    socketio.emit("file_chunk", { transfer_id: transferId, index: i, data: chunk });
+    const p = div.querySelector(".file-progress");
+    if (p) p.textContent = `sending… ${Math.round(((i + 1) / totalChunks) * 100)}%`;
+    if (i % 3 === 0) await new Promise(r => setTimeout(r, 0));  // yield so the UI/socket stays responsive
+  }
+  socketio.emit("file_chunk_end", { transfer_id: transferId });
+}
+
+// ── Receiving a chunked file from someone else ───────────────────────────
+const incomingTransfers = {};  // transfer_id -> { name, filename, mime, total_chunks, chunks, received, timestamp, div }
+
+socketio.on("file_chunk_meta", (meta) => {
+  const div = document.createElement("div");
+  div.className = "left-message-box";
+  div.dataset.mid = meta.transfer_id;
+  div.innerHTML = `
+    <div class="username">${esc(meta.name)}</div>
+    <div class="message">📎 ${esc(meta.filename)}</div>
+    <div class="msg-footer">
+      <span class="timestamp">${esc(meta.timestamp)}</span>
+      <span class="file-progress" style="opacity:.6;font-size:11px;margin-left:6px;">receiving… 0%</span>
+    </div>`;
+  messagesDiv.appendChild(div);
+  scrollToBottom();
+  incomingTransfers[meta.transfer_id] = {
+    name: meta.name, filename: meta.filename, mime: meta.mime,
+    total_chunks: meta.total_chunks, chunks: new Array(meta.total_chunks),
+    received: 0, timestamp: meta.timestamp, div
+  };
+});
+
+socketio.on("file_chunk", (c) => {
+  const t = incomingTransfers[c.transfer_id];
+  if (!t) return;
+  if (t.chunks[c.index] === undefined) t.received++;
+  t.chunks[c.index] = c.data;
+  const pct = Math.round((t.received / t.total_chunks) * 100);
+  const p = t.div.querySelector(".file-progress");
+  if (p) p.textContent = `receiving… ${pct}%`;
+});
+
+socketio.on("file_chunk_complete", async (info) => {
+  // our own upload: just finalize the footer (ticks) on the div we already rendered
+  const ownDiv = messagesDiv.querySelector(`[data-mid="${CSS.escape(info.transfer_id)}"].right-message-box`);
+  if (ownDiv) {
+    const footer = ownDiv.querySelector(".msg-footer");
+    if (footer) footer.innerHTML = `<span class="timestamp">${esc(info.timestamp)}</span>${tickHtml(info.id)}`;
+    ownDiv.querySelector(".msg-ticks")?.addEventListener("click", (e) => {
+      e.stopPropagation(); showSeenInfo(info.id);
+    });
+    return;
+  }
+  const t = incomingTransfers[info.transfer_id];
+  if (!t) return;
+  delete incomingTransfers[info.transfer_id];
+  const payload = t.chunks.join("");
+  await renderFileBody(t.div, {
+    id: info.id, name: t.name, filename: t.filename, mime: t.mime,
+    timestamp: info.timestamp, data: payload
+  });
+  observeForSeen(t.div);
+});
+
 
 // ── Fullscreen ─────────────────────────────────────────────────────────
 document.getElementById("fullscreen-btn").addEventListener("click",()=>{
