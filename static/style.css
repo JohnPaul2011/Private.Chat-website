@@ -349,6 +349,8 @@ p { text-align: center; margin-top: 12px; font-size: 13px; color: var(--wa-sub);
 }
 .e2ee-banner svg { flex-shrink: 0; opacity: .8; }
 
+#mic-btn.hidden, #send-btn.hidden { display: none; }
+
 .messages {
   flex: 1;
   overflow-y: auto;
