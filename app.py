@@ -383,7 +383,7 @@ def games_page():
 
 
 # ─────────────────────────────── chat socket ────────────────────────────────
-MAX_FILE_B64 = int(5 * 1024 * 1024 * 1.4)  # 5MB raw budget, generous headroom for base64+gzip overhead
+MAX_FILE_B64 = int(5 * 1024 * 1024 * 1.4)  # 5MB raw budget, headroom for base64 overhead
 
 @socketio.on("message")
 def message(data):
@@ -424,7 +424,7 @@ def message(data):
 
 # ─────────────────────────── chunked file transfer ───────────────────────────
 # Files/photos are streamed in pieces instead of one giant blocking payload:
-# the sender splits the (already gzip+encrypted) blob into chunks and emits
+# the sender splits the (already encrypted) blob into chunks and emits
 # them one at a time; the server relays each chunk live to everyone else in
 # the room (so they can show a progress bar / start reconstructing early)
 # and buffers them to reassemble a single stored message once complete.
