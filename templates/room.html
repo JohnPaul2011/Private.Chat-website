@@ -84,6 +84,7 @@
       </svg>
     </button>
     <input id="file-input" type="file" hidden accept="image/*,.pdf,.txt,.zip,.doc,.docx,.mp4,.mov">
+    <input id="message" type="text" placeholder="Type a message…" autocomplete="off">
     <button id="mic-btn" class="input-icon-btn" title="Record voice message">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="20" height="20">
         <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
@@ -91,7 +92,6 @@
         <line x1="8" y1="23" x2="16" y2="23"/>
       </svg>
     </button>
-    <input id="message" type="text" placeholder="Type a message…" autocomplete="off">
     <button id="send-btn" title="Send">
       <svg viewBox="0 0 24 24" fill="white" width="20" height="20">
         <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/>
@@ -562,6 +562,7 @@ async function sendMessage() {
   socketio.emit("message",{type:"text",data:ciphertext,reply_to:replyPayload});
   msgInput.value=""; cancelReply(); msgInput.focus();
   stopTyping();
+  updateSendMicVisibility();
 }
 sendBtn.addEventListener("click", sendMessage);
 msgInput.addEventListener("keypress",(e)=>{ if(e.key==="Enter"){e.preventDefault();sendMessage();} });
