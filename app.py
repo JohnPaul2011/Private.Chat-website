@@ -383,8 +383,6 @@ def games_page():
 
 
 # ─────────────────────────────── chat socket ────────────────────────────────
-MAX_FILE_B64 = int(5 * 1024 * 1024 * 1.4)  # 5MB raw budget, headroom for base64 overhead
-
 @socketio.on("message")
 def message(data):
     r    = session.get("room")
@@ -401,13 +399,6 @@ def message(data):
         if not isinstance(audio, str) or len(audio) > 800_000: return
         content = {"id":mid,"name":name,"type":"voice","audio":audio,"mime":mime,
                    "duration":data.get("duration",0),"timestamp":ts}
-    elif mtype == "file":
-        payload = data.get("data","")
-        filename = str(data.get("filename",""))[:255]
-        mime = str(data.get("mime",""))[:100]
-        if not isinstance(payload, str) or len(payload) > MAX_FILE_B64: return
-        content = {"id":mid,"name":name,"type":"file","data":payload,
-                   "filename":filename,"mime":mime,"timestamp":ts}
     else:
         text = data.get("data","")
         if not isinstance(text, str) or len(text) > 8000: return
@@ -419,85 +410,6 @@ def message(data):
         rooms[r].setdefault("seen", {})[mid] = {}
         if len(rooms[r]["messages"]) > 500:
             rooms[r]["messages"] = rooms[r]["messages"][-500:]
-    _push_admin_update()
-
-
-# ─────────────────────────── chunked file transfer ───────────────────────────
-# Files/photos are streamed in pieces instead of one giant blocking payload:
-# the sender splits the (already encrypted) blob into chunks and emits
-# them one at a time; the server relays each chunk live to everyone else in
-# the room (so they can show a progress bar / start reconstructing early)
-# and buffers them to reassemble a single stored message once complete.
-MAX_TRANSFER_CHUNKS = 300
-MAX_CHUNK_LEN        = 250_000
-TRANSFER_ID_RE       = re.compile(r"^[A-Za-z0-9_\-]{1,64}$")
-_file_transfers = {}   # transfer_id -> {room, name, filename, mime, total_chunks, chunks, received, started}
-
-@socketio.on("file_chunk_start")
-def file_chunk_start(data):
-    r    = session.get("room")
-    name = session.get("name","")
-    if r not in rooms or not name or name not in rooms[r]["members"]: return
-    if rate_limited(name): return
-    transfer_id = str(data.get("transfer_id",""))
-    total_chunks = data.get("total_chunks")
-    if not TRANSFER_ID_RE.match(transfer_id): return
-    if not isinstance(total_chunks, int) or not (0 < total_chunks <= MAX_TRANSFER_CHUNKS): return
-    filename = str(data.get("filename",""))[:255]
-    mime     = str(data.get("mime",""))[:100]
-    ts       = time.strftime('%H:%M %p')
-    with _state_lock:
-        if transfer_id in _file_transfers: return   # id collision/replay, reject
-        _file_transfers[transfer_id] = {
-            "room": r, "name": name, "filename": filename, "mime": mime,
-            "total_chunks": total_chunks, "chunks": [None]*total_chunks,
-            "received": 0, "started": time.time(), "timestamp": ts
-        }
-    socketio.emit("file_chunk_meta", {
-        "transfer_id": transfer_id, "name": name, "filename": filename,
-        "mime": mime, "total_chunks": total_chunks, "timestamp": ts
-    }, to=r, include_self=False)
-
-@socketio.on("file_chunk")
-def file_chunk(data):
-    r    = session.get("room")
-    name = session.get("name","")
-    transfer_id = str(data.get("transfer_id",""))
-    idx  = data.get("index")
-    chunk = data.get("data","")
-    if not isinstance(chunk, str) or len(chunk) > MAX_CHUNK_LEN: return
-    with _state_lock:
-        t = _file_transfers.get(transfer_id)
-        if not t or t["room"] != r or t["name"] != name: return
-        if not isinstance(idx, int) or not (0 <= idx < t["total_chunks"]): return
-        if t["chunks"][idx] is None:
-            t["received"] += 1
-        t["chunks"][idx] = chunk
-    socketio.emit("file_chunk", {"transfer_id": transfer_id, "index": idx, "data": chunk},
-                   to=r, include_self=False)
-
-@socketio.on("file_chunk_end")
-def file_chunk_end(data):
-    r    = session.get("room")
-    name = session.get("name","")
-    transfer_id = str(data.get("transfer_id",""))
-    with _state_lock:
-        t = _file_transfers.pop(transfer_id, None)
-        if not t or t["room"] != r or t["name"] != name: return
-        if t["received"] != t["total_chunks"] or any(c is None for c in t["chunks"]): return
-        full_payload = "".join(t["chunks"])
-        if len(full_payload) > MAX_FILE_B64: return
-        content = {"id": transfer_id, "name": name, "type": "file", "data": full_payload,
-                   "filename": t["filename"], "mime": t["mime"], "timestamp": t["timestamp"]}
-        if r in rooms:
-            rooms[r]["messages"].append(content)
-            rooms[r].setdefault("seen", {})[transfer_id] = {}
-            if len(rooms[r]["messages"]) > 500:
-                rooms[r]["messages"] = rooms[r]["messages"][-500:]
-    socketio.emit("file_chunk_complete", {
-        "transfer_id": transfer_id, "id": transfer_id, "name": name,
-        "timestamp": t["timestamp"]
-    }, to=r)
     _push_admin_update()
 
 @socketio.on("latency_ping")
@@ -565,10 +477,6 @@ def connect(auth=None):
 def disconnect():
     r    = session.get("room")
     name = session.get("name")
-    if r and name:
-        with _state_lock:
-            stale = [tid for tid,t in _file_transfers.items() if t["room"] == r and t["name"] == name]
-            for tid in stale: _file_transfers.pop(tid, None)
     if r and name and r in rooms:
         with _state_lock:
             removed = name in rooms[r]["members"]

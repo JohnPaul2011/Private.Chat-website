@@ -78,12 +78,6 @@
 
   <!-- ── Input bar ── -->
   <div class="inputs">
-    <button id="attach-btn" class="input-icon-btn" title="Send a file or photo">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="20" height="20">
-        <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/>
-      </svg>
-    </button>
-    <input id="file-input" type="file" hidden accept="image/*,.pdf,.txt,.zip,.doc,.docx,.mp4,.mov">
     <input id="message" type="text" placeholder="Type a message…" autocomplete="off">
     <button id="mic-btn" class="input-icon-btn" title="Record voice message">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="20" height="20">
@@ -147,9 +141,9 @@ async function decryptText(payload) {
   } catch (e) { return payload; }
 }
 
-// ── File/photo/voice transfer: plain AES-GCM over raw bytes (no compression —
-// photos/audio are already compressed by their own format, gzip added nothing
-// but an external CDN dependency and a failure point) ──
+// ── Voice message encryption: plain AES-GCM over raw bytes (no compression —
+// audio is already compressed by the Opus codec, gzip added nothing but an
+// external CDN dependency and a failure point) ──
 async function encryptBytes(bytes) {
   await keyReady;
   const iv = crypto.getRandomValues(new Uint8Array(12));
@@ -194,8 +188,6 @@ socketio.on("disconnect", () => {
 socketio.on("message", async (data) => {
   if (data.type === "voice") {
     await createVoiceMessage(data);
-  } else if (data.type === "file") {
-    createFileMessage(data);
   } else {
     const msg = await decryptText(data.message);
     let replyTo = data.reply_to || null;
@@ -401,88 +393,6 @@ async function createVoiceMessage(data) {
   scrollToBottom();
 }
 
-async function renderFileBody(div, data) {
-  let bodyHtml = `<div class="username">${esc(data.name)}</div><div class="message">📎 ${esc(data.filename)}</div>`;
-  let isImage = false, imageUrl = null;
-  try {
-    const bytes = await decryptBytes(data.data);
-    const blob = new Blob([bytes], { type: data.mime || "application/octet-stream" });
-    const url = URL.createObjectURL(blob);
-    if ((data.mime || "").startsWith("image/")) {
-      isImage = true; imageUrl = url;
-      const imgId = "img-" + Math.random().toString(36).slice(2);
-      bodyHtml = `<div class="username">${esc(data.name)}</div>
-        <div class="file-image-wrap" id="${imgId}-wrap" style="max-width:220px;margin-top:4px;cursor:pointer;">
-          <img id="${imgId}" alt="${esc(data.filename)}" class="file-image-thumb"
-               style="max-width:220px;max-height:220px;border-radius:8px;display:block;
-                      filter:blur(10px);transform:scale(1.03);
-                      transition:filter .35s ease, transform .35s ease;">
-        </div>`;
-      setTimeout(() => buildThumbThenReveal(imgId, url), 0);
-    } else {
-      bodyHtml = `<div class="username">${esc(data.name)}</div>
-        <a href="${url}" download="${esc(data.filename)}" style="display:flex;align-items:center;gap:6px;text-decoration:none;color:inherit;">
-          📎 <span>${esc(data.filename)}</span>
-        </a>`;
-    }
-  } catch (e) {
-    bodyHtml += `<div style="opacity:.7;font-size:12px">[unable to decrypt file]</div>`;
-  }
-
-  const isOwn = data.name === USERNAME;
-  div.innerHTML = `${bodyHtml}
-    <div class="msg-footer">
-      <span class="timestamp">${esc(data.timestamp)}</span>
-      ${isOwn && data.id ? tickHtml(data.id) : ""}
-    </div>`;
-  if (isImage) {
-    div.querySelector(".file-image-wrap")?.addEventListener("click", () => openImageLightbox(imageUrl, data.filename));
-  }
-  if (isOwn && data.id) {
-    div.querySelector(".msg-ticks")?.addEventListener("click", (e) => {
-      e.stopPropagation(); showSeenInfo(data.id);
-    });
-  }
-}
-
-async function createFileMessage(data) {
-  const isOwn = data.name === USERNAME;
-  const div = document.createElement("div");
-  div.className = isOwn ? "right-message-box" : "left-message-box";
-  if (data.id) div.dataset.mid = data.id;
-  await renderFileBody(div, data);
-  messagesDiv.appendChild(div);
-  if (!isOwn && data.id) observeForSeen(div);
-  scrollToBottom();
-}
-
-// show a tiny blurred low-res thumbnail immediately, then swap in the full image and unblur/scale it in
-function buildThumbThenReveal(imgId, fullUrl) {
-  const imgEl = document.getElementById(imgId);
-  if (!imgEl) return;
-  const probe = new Image();
-  probe.onload = () => {
-    const THUMB_W = 24;
-    const scale = THUMB_W / probe.naturalWidth;
-    const canvas = document.createElement("canvas");
-    canvas.width = THUMB_W;
-    canvas.height = Math.max(1, Math.round(probe.naturalHeight * scale));
-    canvas.getContext("2d").drawImage(probe, 0, 0, canvas.width, canvas.height);
-    imgEl.src = canvas.toDataURL("image/jpeg", 0.5);   // tiny blurred placeholder, shown instantly
-
-    const full = new Image();
-    full.onload = () => {
-      requestAnimationFrame(() => {
-        imgEl.src = fullUrl;
-        imgEl.style.filter = "blur(0)";
-        imgEl.style.transform = "scale(1)";
-      });
-    };
-    full.src = fullUrl;
-  };
-  probe.src = fullUrl;
-}
-
 // ── Read receipts ────────────────────────────────────────────────────────
 let pendingSeenIds = new Set();
 let seenFlushTimer = null;
@@ -659,168 +569,6 @@ function updateSendMicVisibility() {
 updateSendMicVisibility();
 msgInput.addEventListener("input", updateSendMicVisibility);
 
-// ── File / photo send (chunked, so a big file doesn't block in one payload) ──
-const MAX_FILE_BYTES = 5 * 1024 * 1024; // 5MB cap
-const CHUNK_CHARS     = 180000;         // ~180KB of base64 text per chunk
-const attachBtn  = document.getElementById("attach-btn");
-const fileInput  = document.getElementById("file-input");
-attachBtn.addEventListener("click", () => fileInput.click());
-fileInput.addEventListener("change", async () => {
-  const file = fileInput.files[0];
-  fileInput.value = "";
-  if (!file) return;
-  if (file.size > MAX_FILE_BYTES) {
-    alert(`File too large. Max size is ${(MAX_FILE_BYTES/1024/1024).toFixed(0)}MB.`);
-    return;
-  }
-  attachBtn.disabled = true;
-  try {
-    await sendFileChunked(file);
-  } finally {
-    attachBtn.disabled = false;
-  }
-});
-
-function genTransferId() {
-  return (crypto.randomUUID ? crypto.randomUUID() : "t" + Date.now() + Math.random().toString(36).slice(2))
-    .replace(/[^A-Za-z0-9_-]/g, "");
-}
-
-// tap an image bubble to open it full-size instead of it acting like a download link
-function openImageLightbox(url, filename) {
-  const overlay = document.createElement("div");
-  overlay.style.cssText = "position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,.9);"
-    + "display:flex;align-items:center;justify-content:center;";
-  overlay.innerHTML = `
-    <img src="${url}" alt="${esc(filename)}" style="max-width:92vw;max-height:92vh;object-fit:contain;border-radius:6px;">
-    <button id="lightbox-close" title="Close" style="position:absolute;top:16px;right:24px;
-      width:36px;height:36px;border-radius:50%;border:none;background:rgba(255,255,255,.15);
-      color:#fff;font-size:20px;line-height:1;cursor:pointer;display:flex;align-items:center;justify-content:center;">✕</button>
-    <a id="lightbox-download" href="${url}" download="${esc(filename)}" title="Download"
-      style="position:absolute;top:16px;right:70px;width:36px;height:36px;border-radius:50%;
-      background:rgba(255,255,255,.15);color:#fff;display:flex;align-items:center;justify-content:center;text-decoration:none;">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="18" height="18">
-        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>
-      </svg>
-    </a>`;
-  overlay.addEventListener("click", (e) => { if (e.target === overlay) overlay.remove(); });
-  document.body.appendChild(overlay);
-  overlay.querySelector("#lightbox-close").addEventListener("click", () => overlay.remove());
-  overlay.querySelector("#lightbox-download").addEventListener("click", (e) => e.stopPropagation());
-}
-
-function fileBubbleHtml(name, url, filename, isImage) {
-  return `<div class="username">${esc(name)}</div>
-    ${isImage
-      ? `<div class="file-image-wrap" style="max-width:220px;margin-top:4px;cursor:pointer;">
-           <img src="${url}" alt="${esc(filename)}" style="max-width:220px;max-height:220px;border-radius:8px;display:block;">
-         </div>`
-      : `<a href="${url}" download="${esc(filename)}" style="display:flex;align-items:center;gap:6px;text-decoration:none;color:inherit;">
-           📎 <span>${esc(filename)}</span>
-         </a>`}`;
-}
-
-async function sendFileChunked(file) {
-  const transferId = genTransferId();
-  const ts = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-  const isImage = (file.type || "").startsWith("image/");
-
-  // Optimistic local render: sender already has the original file, no need to
-  // wait for the round trip or re-decrypt their own upload.
-  const localUrl = URL.createObjectURL(file);
-  const div = document.createElement("div");
-  div.className = "right-message-box";
-  div.dataset.mid = transferId;
-  div.innerHTML = `${fileBubbleHtml(USERNAME, localUrl, file.name, isImage)}
-    <div class="msg-footer">
-      <span class="timestamp">${esc(ts)}</span>
-      <span class="file-progress" style="opacity:.6;font-size:11px;margin-left:6px;">sending… 0%</span>
-    </div>`;
-  if (isImage) {
-    div.querySelector(".file-image-wrap")?.addEventListener("click", () => openImageLightbox(localUrl, file.name));
-  }
-  messagesDiv.appendChild(div);
-  scrollToBottom();
-
-  try {
-    const bytes = new Uint8Array(await file.arrayBuffer());
-    const payload = await encryptBytes(bytes);
-    const totalChunks = Math.max(1, Math.ceil(payload.length / CHUNK_CHARS));
-
-    socketio.emit("file_chunk_start", {
-      transfer_id: transferId, filename: file.name,
-      mime: file.type || "application/octet-stream", total_chunks: totalChunks
-    });
-    for (let i = 0; i < totalChunks; i++) {
-      const chunk = payload.slice(i * CHUNK_CHARS, (i + 1) * CHUNK_CHARS);
-      socketio.emit("file_chunk", { transfer_id: transferId, index: i, data: chunk });
-      const p = div.querySelector(".file-progress");
-      if (p) p.textContent = `sending… ${Math.round(((i + 1) / totalChunks) * 100)}%`;
-      if (i % 3 === 0) await new Promise(r => setTimeout(r, 0));  // yield so the UI/socket stays responsive
-    }
-    socketio.emit("file_chunk_end", { transfer_id: transferId });
-  } catch (e) {
-    const p = div.querySelector(".file-progress");
-    if (p) { p.textContent = "failed to send"; p.style.color = "#e53935"; }
-  }
-}
-
-// ── Receiving a chunked file from someone else ───────────────────────────
-const incomingTransfers = {};  // transfer_id -> { name, filename, mime, total_chunks, chunks, received, timestamp, div }
-
-socketio.on("file_chunk_meta", (meta) => {
-  const div = document.createElement("div");
-  div.className = "left-message-box";
-  div.dataset.mid = meta.transfer_id;
-  div.innerHTML = `
-    <div class="username">${esc(meta.name)}</div>
-    <div class="message">📎 ${esc(meta.filename)}</div>
-    <div class="msg-footer">
-      <span class="timestamp">${esc(meta.timestamp)}</span>
-      <span class="file-progress" style="opacity:.6;font-size:11px;margin-left:6px;">receiving… 0%</span>
-    </div>`;
-  messagesDiv.appendChild(div);
-  scrollToBottom();
-  incomingTransfers[meta.transfer_id] = {
-    name: meta.name, filename: meta.filename, mime: meta.mime,
-    total_chunks: meta.total_chunks, chunks: new Array(meta.total_chunks),
-    received: 0, timestamp: meta.timestamp, div
-  };
-});
-
-socketio.on("file_chunk", (c) => {
-  const t = incomingTransfers[c.transfer_id];
-  if (!t) return;
-  if (t.chunks[c.index] === undefined) t.received++;
-  t.chunks[c.index] = c.data;
-  const pct = Math.round((t.received / t.total_chunks) * 100);
-  const p = t.div.querySelector(".file-progress");
-  if (p) p.textContent = `receiving… ${pct}%`;
-});
-
-socketio.on("file_chunk_complete", async (info) => {
-  // our own upload: just finalize the footer (ticks) on the div we already rendered
-  const ownDiv = messagesDiv.querySelector(`[data-mid="${CSS.escape(info.transfer_id)}"].right-message-box`);
-  if (ownDiv) {
-    const footer = ownDiv.querySelector(".msg-footer");
-    if (footer) footer.innerHTML = `<span class="timestamp">${esc(info.timestamp)}</span>${tickHtml(info.id)}`;
-    ownDiv.querySelector(".msg-ticks")?.addEventListener("click", (e) => {
-      e.stopPropagation(); showSeenInfo(info.id);
-    });
-    return;
-  }
-  const t = incomingTransfers[info.transfer_id];
-  if (!t) return;
-  delete incomingTransfers[info.transfer_id];
-  const payload = t.chunks.join("");
-  await renderFileBody(t.div, {
-    id: info.id, name: t.name, filename: t.filename, mime: t.mime,
-    timestamp: info.timestamp, data: payload
-  });
-  observeForSeen(t.div);
-});
-
-
 // ── Fullscreen ─────────────────────────────────────────────────────────
 document.getElementById("fullscreen-btn").addEventListener("click",()=>{
   if(!document.fullscreenElement) roomWrapper.requestFullscreen().catch(()=>{});
@@ -844,8 +592,6 @@ document.addEventListener("fullscreenchange",()=>{
   for (const msg of history) {
     if (msg.type === "voice") {
       await createVoiceMessage(msg);
-    } else if (msg.type === "file") {
-      await createFileMessage(msg);
     } else {
       const text = await decryptText(msg.message);
       let replyTo = msg.reply_to || null;
