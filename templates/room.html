@@ -570,14 +570,37 @@ updateSendMicVisibility();
 msgInput.addEventListener("input", updateSendMicVisibility);
 
 // ── Fullscreen ─────────────────────────────────────────────────────────
+function fsElement() {
+  return document.fullscreenElement || document.webkitFullscreenElement ||
+         document.mozFullScreenElement || document.msFullscreenElement || null;
+}
+function requestFs(el) {
+  const fn = el.requestFullscreen || el.webkitRequestFullscreen ||
+             el.mozRequestFullScreen || el.msRequestFullscreen;
+  if (!fn) return Promise.reject(new Error("Fullscreen API not supported in this browser."));
+  const result = fn.call(el);
+  return result && result.catch ? result : Promise.resolve();
+}
+function exitFs() {
+  const fn = document.exitFullscreen || document.webkitExitFullscreen ||
+             document.mozCancelFullScreen || document.msExitFullscreen;
+  if (!fn) return Promise.reject(new Error("Fullscreen API not supported in this browser."));
+  const result = fn.call(document);
+  return result && result.catch ? result : Promise.resolve();
+}
 document.getElementById("fullscreen-btn").addEventListener("click",()=>{
-  if(!document.fullscreenElement) roomWrapper.requestFullscreen().catch(()=>{});
-  else document.exitFullscreen().catch(()=>{});
+  if (!fsElement()) {
+    requestFs(roomWrapper).catch(err => console.warn("Fullscreen request failed:", err));
+  } else {
+    exitFs().catch(err => console.warn("Exit fullscreen failed:", err));
+  }
 });
-document.addEventListener("fullscreenchange",()=>{
-  const fs=!!document.fullscreenElement;
-  document.getElementById("fs-expand").style.display  = fs?"none":"block";
-  document.getElementById("fs-compress").style.display= fs?"block":"none";
+["fullscreenchange","webkitfullscreenchange","mozfullscreenchange","MSFullscreenChange"].forEach(evt => {
+  document.addEventListener(evt, () => {
+    const fs = !!fsElement();
+    document.getElementById("fs-expand").style.display   = fs ? "none"  : "block";
+    document.getElementById("fs-compress").style.display  = fs ? "block" : "none";
+  });
 });
 
 // ── Render history ─────────────────────────────────────────────────────
