@@ -17,7 +17,7 @@ if PROXY_HOPS > 0:
 app.config['SECRET_KEY'] = os.environ.get("SECRET_KEY") or secrets.token_hex(32)
 app.config['SESSION_COOKIE_HTTPONLY'] = True
 app.config['SESSION_COOKIE_SAMESITE'] = "Lax"
-app.config['SESSION_COOKIE_SECURE'] = os.environ.get("FORCE_HTTPS", "1") == "1"
+app.config['SESSION_COOKIE_SECURE'] = os.environ.get("FORCE_HTTPS", "0") == "1"
 app.config['PERMANENT_SESSION_LIFETIME'] = datetime.timedelta(minutes=30)
 socketio = SocketIO(app, async_mode="threading", logger=False, engineio_logger=False,
                     ping_timeout=10, ping_interval=8)
@@ -794,3 +794,4 @@ def g_leave(data):
 if __name__ == "__main__":
     debug = os.environ.get("FLASK_DEBUG","0") == "1"
     socketio.run(app, host="0.0.0.0", port=10000, debug=debug, use_reloader=debug)
+ 
