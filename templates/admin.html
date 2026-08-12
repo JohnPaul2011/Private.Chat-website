@@ -258,11 +258,26 @@
     const container = document.getElementById("roomsContainer");
     const codes = Object.keys(rooms);
 
+    // remember which rooms have their capture panel open (and what's shown in the blob view)
+    // so a live update doesn't collapse it out from under the admin mid-review.
+    const openState = {};
+    container.querySelectorAll("details.capture-section").forEach(d => {
+      const code = d.dataset.code;
+      if (!code) return;
+      const blobBox = d.querySelector(".blob-view");
+      openState[code] = {
+        open: d.open,
+        blobVisible: blobBox && blobBox.style.display !== "none",
+        blobText: blobBox ? blobBox.textContent : ""
+      };
+    });
+
     if (codes.length === 0) {
       container.innerHTML = '<p id="noRooms">No active rooms.</p>';
     } else {
       container.innerHTML = codes.map(code => {
         const r = rooms[code];
+        const isEmpty = !!r.empty;
         const memberRows = r.members.map(member => `
           <div class="member-row">
             <span>${esc(member)}</span>
@@ -273,15 +288,21 @@
         const sourceNote = r.save_history
           ? `History saved (${r.message_count} msgs) ${capturing ? `+ live capture (${r.captured_count})` : ""}`
           : `History off ${capturing ? `— live capture only (${r.captured_count})` : "— nothing retained unless capturing"}`;
+        const st = openState[code];
+        const emptyBadge = isEmpty
+          ? `<span style="font-family:var(--ops-mono);font-size:10px;color:var(--ops-warn);
+               background:rgba(240,180,41,.12);border:1px solid rgba(240,180,41,.3);
+               padding:2px 6px;border-radius:4px;margin-left:8px;">EMPTY · AWAITING CLEANUP</span>`
+          : "";
         return `
           <div class="room-card">
-            <h3><span class="room-code">Room ${esc(code)}</span><span class="msg-count">${r.message_count} msgs</span></h3>
+            <h3><span class="room-code">Room ${esc(code)}${emptyBadge}</span><span class="msg-count">${r.message_count} msgs</span></h3>
             ${memberRows || '<div class="member-row" style="color:var(--ops-muted)">No members</div>'}
             <div class="btn-row">
               <button class="danger-btn" data-action="kickall" data-code="${esc(code)}">Kick All</button>
               <button class="danger-btn" data-action="clear" data-code="${esc(code)}">Clear Messages</button>
             </div>
-            <details class="capture-section">
+            <details class="capture-section" data-code="${esc(code)}" ${st && st.open ? "open" : ""}>
               <summary>Encrypted Messages</summary>
               <div class="capture-note">${esc(sourceNote)}</div>
               <button class="capture-btn ${capturing ? "capturing" : ""}"
@@ -290,7 +311,8 @@
               </button>
               <button class="capture-btn" data-action="view-blobs" data-code="${esc(code)}">View Blobs</button>
               <button class="capture-btn" data-action="save-blobs" data-code="${esc(code)}">Save Blobs</button>
-              <div class="blob-view" id="blob-view-${esc(code)}" style="display:none;"></div>
+              <div class="blob-view" id="blob-view-${esc(code)}"
+                   style="display:${st && st.blobVisible ? "block" : "none"};">${st ? esc(st.blobText) : ""}</div>
             </details>
           </div>`;
       }).join("");

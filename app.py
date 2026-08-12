@@ -175,12 +175,27 @@ def admin_logout():
 capturing_rooms = set()          # room codes currently being live-captured
 captured_messages = {}           # room code -> list of captured ciphertext messages
 
+ROOM_EMPTY_GRACE = 30 * 60   # empty rooms stay visible/exportable to admin for 30 min before real cleanup
+
+def _sweep_empty_rooms():
+    now = time.time()
+    with _state_lock:
+        stale = [c for c, r in rooms.items()
+                 if r.get("empty_since") and (now - r["empty_since"] > ROOM_EMPTY_GRACE)
+                 and c not in capturing_rooms]   # never auto-sweep a room mid-capture
+        for c in stale:
+            rooms.pop(c, None)
+            room_passwords.pop(c, None)
+            captured_messages.pop(c, None)
+
 def _admin_room_snapshot():
+    _sweep_empty_rooms()
     with _state_lock:
         return {c: {"members": list(r["members"]), "message_count": len(r["messages"]),
                      "save_history": bool(r.get("save_history")),
                      "capturing": c in capturing_rooms,
-                     "captured_count": len(captured_messages.get(c, []))}
+                     "captured_count": len(captured_messages.get(c, [])),
+                     "empty": bool(r.get("empty_since"))}
                 for c, r in rooms.items()}
 
 def _push_admin_update():
@@ -294,24 +309,25 @@ def admin_announce():
         return redirect(url_for("admin_panel"))
 
     ts = time.strftime('%H:%M %p')
-    content = {"name":"Announcement","type":"text","message":text,
-               "reply_to":None,"timestamp":ts}
+    content = {"id": str(uuid.uuid4()), "name":"Announcement", "type":"text", "message":text,
+               "reply_to":None, "timestamp":ts}
 
     if target == "all":
         with _state_lock:
             codes = list(rooms.keys())
         for code in codes:
             with _state_lock:
-                if code in rooms:
+                if code in rooms and rooms[code].get("save_history"):
                     rooms[code]["messages"].append(content)
-            send(content, to=code)
+            socketio.emit("message", content, to=code)
         flash(f"Announcement sent to {len(codes)} room(s).","info")
     else:
         with _state_lock:
             exists = target in rooms
-            if exists: rooms[target]["messages"].append(content)
+            if exists and rooms[target].get("save_history"):
+                rooms[target]["messages"].append(content)
         if exists:
-            send(content, to=target)
+            socketio.emit("message", content, to=target)
             flash(f"Announcement sent to {target}.","info")
         else:
             flash("Room not found.","error")
@@ -503,6 +519,7 @@ def connect(auth=None):
     join_room(r)
     with _state_lock:
         if name not in rooms[r]["members"]: rooms[r]["members"].append(name)
+        rooms[r].pop("empty_since", None)
         members = list(rooms[r]["members"])
     send({"name":"System","type":"text","message":f"{name} entered the room",
           "timestamp":time.strftime('%H:%M %p')}, to=r)
@@ -519,8 +536,8 @@ def disconnect():
             if removed: rooms[r]["members"].remove(name)
             empty = removed and not rooms[r]["members"]
             if empty:
-                del rooms[r]; room_passwords.pop(r,None)
-            members = list(rooms[r]["members"]) if not empty and r in rooms else []
+                rooms[r]["empty_since"] = time.time()   # kept around briefly for admin export, see ROOM_EMPTY_GRACE
+            members = list(rooms[r]["members"]) if r in rooms else []
         if removed:
             send({"name":"System","type":"text","message":f"{name} left the room",
                   "timestamp":time.strftime('%H:%M %p')}, to=r)
