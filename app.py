@@ -1,3 +1,6 @@
+from gevent import monkey
+monkey.patch_all()
+
 from flask import render_template, Flask, request, redirect, session, url_for, flash, jsonify, abort
 from flask_socketio import SocketIO, send, join_room, leave_room, emit
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -19,7 +22,7 @@ app.config['SESSION_COOKIE_HTTPONLY'] = True
 app.config['SESSION_COOKIE_SAMESITE'] = "Lax"
 app.config['SESSION_COOKIE_SECURE'] = os.environ.get("FORCE_HTTPS", "0") == "1"
 app.config['PERMANENT_SESSION_LIFETIME'] = datetime.timedelta(minutes=30)
-socketio = SocketIO(app, async_mode="threading", logger=False, engineio_logger=False,
+socketio = SocketIO(app, async_mode="gevent", logger=False, engineio_logger=False,
                     ping_timeout=10, ping_interval=8)
 
 BAD_USERNAMES = {"admin","server","system","moderator","host"}
@@ -169,9 +172,15 @@ def admin_logout():
     session.pop("is_admin", None)
     return redirect(url_for("index"))
 
+capturing_rooms = set()          # room codes currently being live-captured
+captured_messages = {}           # room code -> list of captured ciphertext messages
+
 def _admin_room_snapshot():
     with _state_lock:
-        return {c: {"members": list(r["members"]), "message_count": len(r["messages"])}
+        return {c: {"members": list(r["members"]), "message_count": len(r["messages"]),
+                     "save_history": bool(r.get("save_history")),
+                     "capturing": c in capturing_rooms,
+                     "captured_count": len(captured_messages.get(c, []))}
                 for c, r in rooms.items()}
 
 def _push_admin_update():
@@ -181,6 +190,48 @@ def _push_admin_update():
 def admin_panel():
     require_admin()
     return render_template("admin.html", rooms=_admin_room_snapshot())
+
+@app.route("/admin/capture/start/<code>", methods=["POST"])
+def admin_capture_start(code):
+    require_admin(); check_csrf()
+    with _state_lock:
+        exists = code in rooms
+        if exists:
+            capturing_rooms.add(code)
+            captured_messages.setdefault(code, [])
+    if exists:
+        flash(f"Started capturing {code}.","info")
+        _push_admin_update()
+    return redirect(url_for("admin_panel"))
+
+@app.route("/admin/capture/stop/<code>", methods=["POST"])
+def admin_capture_stop(code):
+    require_admin(); check_csrf()
+    with _state_lock:
+        was_capturing = code in capturing_rooms
+        capturing_rooms.discard(code)
+    if was_capturing:
+        flash(f"Stopped capturing {code}.","info")
+        _push_admin_update()
+    return redirect(url_for("admin_panel"))
+
+@app.route("/admin/blobs/<code>")
+def admin_blobs(code):
+    require_admin()
+    with _state_lock:
+        stored = list(rooms[code]["messages"]) if code in rooms and rooms[code].get("save_history") else []
+        captured = list(captured_messages.get(code, []))
+    merged = {m["id"]: m for m in stored}
+    for m in captured:
+        merged.setdefault(m["id"], m)   # stored copy wins if a message exists in both
+    combined = sorted(merged.values(), key=lambda m: m.get("timestamp",""))
+    return jsonify({
+        "room": code,
+        "exported_at": time.strftime('%Y-%m-%d %H:%M:%S'),
+        "note": "Message content is AES-256-GCM encrypted client-side. This is ciphertext only — no decryption key exists on this server.",
+        "sources": {"stored_history": len(stored), "live_captured": len(captured)},
+        "messages": combined
+    })
 
 @app.route("/admin/clear/<code>", methods=["POST"])
 def admin_clear(code):
@@ -388,10 +439,13 @@ def message(data):
                    "reply_to":data.get("reply_to"),"timestamp":ts}
     send(content, to=r)
     with _state_lock:
-        rooms[r]["messages"].append(content)
-        rooms[r].setdefault("seen", {})[mid] = {}
-        if len(rooms[r]["messages"]) > 500:
-            rooms[r]["messages"] = rooms[r]["messages"][-500:]
+        if rooms[r].get("save_history"):
+            rooms[r]["messages"].append(content)
+            rooms[r].setdefault("seen", {})[mid] = {}
+            if len(rooms[r]["messages"]) > 500:
+                rooms[r]["messages"] = rooms[r]["messages"][-500:]
+        if r in capturing_rooms:
+            captured_messages.setdefault(r, []).append(content)
     _push_admin_update()
 
 @socketio.on("latency_ping")

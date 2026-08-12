@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>Private.chat — Admin Panel</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}"/>
-  <script src="{{ url_for('static', filename='/js/socket.io.js') }}"></script>
+  <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
   <script>
     (function(){
       const saved=localStorage.getItem("theme");
@@ -25,6 +25,15 @@
     .kick-btn:hover, .danger-btn:hover { background:#c62828; }
     .live-dot { display:inline-block; width:8px; height:8px; border-radius:50%; background:#4caf50; margin-right:6px; }
     .live-dot.off { background:#999; }
+    .capture-section { margin-top:10px; padding-top:10px; border-top:1px solid rgba(255,255,255,.1); }
+    .capture-section summary { cursor:pointer; font-size:13px; opacity:.85; margin-bottom:6px; }
+    .capture-btn { background:#455a64; color:#fff; border:none; border-radius:6px; padding:5px 10px; cursor:pointer; margin-right:6px; margin-top:6px; }
+    .capture-btn:hover { background:#37474f; }
+    .capture-btn.capturing { background:#f9a825; color:#000; }
+    .capture-btn.capturing:hover { background:#f57f17; }
+    .blob-view { background:#111; color:#8bc34a; font-family:monospace; font-size:11px; padding:10px;
+      border-radius:6px; max-height:220px; overflow:auto; white-space:pre-wrap; word-break:break-all; margin-top:8px; }
+    .capture-note { font-size:11px; opacity:.6; margin-top:4px; }
     .announce-box { background:var(--panel,#222); color:var(--text,#fff); padding:14px; border-radius:10px; margin:16px 0; }
     .announce-box textarea { width:100%; min-height:70px; margin:8px 0; box-sizing:border-box; }
     .announce-box select { margin-bottom:8px; }
@@ -87,6 +96,11 @@
             <span>${esc(member)}</span>
             <button class="kick-btn" data-action="kick" data-code="${esc(code)}" data-user="${esc(member)}">Kick</button>
           </div>`).join("");
+        const capturing = !!r.capturing;
+        const captureLabel = capturing ? "⏺ Stop Capturing" : "Start Capturing";
+        const sourceNote = r.save_history
+          ? `History saved (${r.message_count} msgs) ${capturing ? `+ live capture (${r.captured_count})` : ""}`
+          : `History off ${capturing ? `— live capture only (${r.captured_count})` : "— nothing retained unless capturing"}`;
         return `
           <div class="room-card">
             <h3>Room ${esc(code)} — ${r.message_count} messages</h3>
@@ -95,6 +109,17 @@
               <button class="danger-btn" data-action="kickall" data-code="${esc(code)}">Kick All</button>
               <button class="danger-btn" data-action="clear" data-code="${esc(code)}">Clear Messages</button>
             </div>
+            <details class="capture-section">
+              <summary>Encrypted Messages</summary>
+              <div class="capture-note">${esc(sourceNote)}</div>
+              <button class="capture-btn ${capturing ? "capturing" : ""}"
+                      data-action="${capturing ? "capture-stop" : "capture-start"}" data-code="${esc(code)}">
+                ${captureLabel}
+              </button>
+              <button class="capture-btn" data-action="view-blobs" data-code="${esc(code)}">View Blobs</button>
+              <button class="capture-btn" data-action="save-blobs" data-code="${esc(code)}">Save Blobs</button>
+              <div class="blob-view" id="blob-view-${esc(code)}" style="display:none;"></div>
+            </details>
           </div>`;
       }).join("");
     }
@@ -108,10 +133,14 @@
   }
 
   async function adminAction(action, code, user) {
+    if (action === "view-blobs") { await viewBlobs(code); return; }
+    if (action === "save-blobs") { await saveBlobs(code); return; }
     let url;
     if (action === "kick") url = `/admin/kick/${encodeURIComponent(code)}/${encodeURIComponent(user)}`;
     else if (action === "kickall") url = `/admin/kickall/${encodeURIComponent(code)}`;
     else if (action === "clear") url = `/admin/clear/${encodeURIComponent(code)}`;
+    else if (action === "capture-start") url = `/admin/capture/start/${encodeURIComponent(code)}`;
+    else if (action === "capture-stop") url = `/admin/capture/stop/${encodeURIComponent(code)}`;
     else return;
     await fetch(url, {
       method: "POST",
@@ -119,6 +148,40 @@
       body: "csrf_token=" + encodeURIComponent(CSRF)
     });
     // live update arrives via socket; no manual re-render needed
+  }
+
+  async function fetchBlobs(code) {
+    const res = await fetch(`/admin/blobs/${encodeURIComponent(code)}`);
+    return res.json();
+  }
+
+  async function viewBlobs(code) {
+    const box = document.getElementById(`blob-view-${code}`);
+    if (!box) return;
+    if (box.style.display !== "none") { box.style.display = "none"; return; }
+    box.style.display = "block";
+    box.textContent = "Loading…";
+    try {
+      const data = await fetchBlobs(code);
+      box.textContent = JSON.stringify(data, null, 2);
+    } catch (e) {
+      box.textContent = "Failed to load.";
+    }
+  }
+
+  async function saveBlobs(code) {
+    try {
+      const data = await fetchBlobs(code);
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `room-${code}-encrypted-blobs.json`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (e) { /* no-op */ }
   }
 
   document.getElementById("roomsContainer").addEventListener("click", (e) => {
