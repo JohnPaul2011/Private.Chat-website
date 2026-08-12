@@ -1,6 +1,6 @@
 # Private.Chat
 
-A real-time, self-hosted chat website with end-to-end encryption, voice messages, and built-in multiplayer games.
+A real-time, self-hosted chat website with end-to-end encryption and voice messages.
 
 ## Features
 
@@ -8,7 +8,6 @@ A real-time, self-hosted chat website with end-to-end encryption, voice messages
 - **End-to-end encryption** — messages and voice clips are encrypted client-side (AES-GCM 256, key derived via PBKDF2 from the room password). The server only ever relays ciphertext; it cannot read chat content
 - **Voice messages** — record and send voice clips, encrypted the same way as text
 - **Reply-to** — quote and reply to specific messages
-- **Multiplayer games** — Tic-Tac-Toe, 2048, and a poison-cup elimination game, playable via shareable game codes
 - **Admin panel** — password + TOTP (2FA) protected dashboard to view active rooms, kick users, kick all, or clear message history
 - **Security hardening** — CSRF protection, rate limiting, login lockout after repeated failures, session timeout, input validation, XSS-safe rendering
 
