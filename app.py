@@ -9,6 +9,7 @@ from colorama import init as init_color
 from pywebpush import webpush, WebPushException
 from authlib.integrations.flask_client import OAuth
 import time, logging, os, re, hmac, hashlib, secrets, base64, struct, datetime, threading, uuid, json
+import requests as _requests
 
 _sysrand = secrets.SystemRandom()
 
@@ -86,6 +87,89 @@ def send_push(google_id, title, body, room=None):
         logging.info(f"Push failed, dropping subscription: {e}")
         with _state_lock:
             push_subscriptions.pop(google_id, None)
+
+
+# ─────────────────────────────── Supabase (friends storage) ─────────────────
+SUPABASE_URL = os.environ.get("SUPABASE_URL", "").rstrip("/")
+SUPABASE_SERVICE_KEY = os.environ.get("SUPABASE_SERVICE_KEY", "")
+
+def _supabase_headers():
+    return {
+        "apikey": SUPABASE_SERVICE_KEY,
+        "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}",
+        "Content-Type": "application/json",
+    }
+
+def supabase_available():
+    return bool(SUPABASE_URL and SUPABASE_SERVICE_KEY)
+
+def sb_list_friends(owner_google_id):
+    if not supabase_available(): return []
+    try:
+        r = _requests.get(
+            f"{SUPABASE_URL}/rest/v1/chat_friends",
+            headers=_supabase_headers(),
+            params={"owner_google_id": f"eq.{owner_google_id}", "order": "created_at.desc"},
+            timeout=8,
+        )
+        r.raise_for_status()
+        return r.json()
+    except Exception as e:
+        logging.info(f"Supabase list_friends failed: {e}")
+        return []
+
+def sb_add_friend(owner_google_id, owner_email, friend_google_id, friend_email, friend_display_name):
+    if not supabase_available(): return False, "Storage not configured"
+    try:
+        r = _requests.post(
+            f"{SUPABASE_URL}/rest/v1/chat_friends",
+            headers={**_supabase_headers(), "Prefer": "resolution=merge-duplicates"},
+            json={
+                "owner_google_id": owner_google_id,
+                "owner_email": owner_email,
+                "friend_google_id": friend_google_id,
+                "friend_email": friend_email,
+                "friend_display_name": friend_display_name,
+            },
+            timeout=8,
+        )
+        if r.status_code >= 400:
+            return False, r.text[:200]
+        return True, None
+    except Exception as e:
+        return False, str(e)
+
+def sb_remove_friend(owner_google_id, friend_google_id):
+    if not supabase_available(): return False
+    try:
+        r = _requests.delete(
+            f"{SUPABASE_URL}/rest/v1/chat_friends",
+            headers=_supabase_headers(),
+            params={"owner_google_id": f"eq.{owner_google_id}", "friend_google_id": f"eq.{friend_google_id}"},
+            timeout=8,
+        )
+        return r.status_code < 400
+    except Exception as e:
+        logging.info(f"Supabase remove_friend failed: {e}")
+        return False
+
+def sb_find_user_by_email(email):
+    """Look up a known google_id for an email, from anyone who has ever shown up as a friend row
+    (owner or friend side) or currently has a push subscription. Best-effort only."""
+    if not supabase_available() or not email: return None
+    try:
+        r = _requests.get(
+            f"{SUPABASE_URL}/rest/v1/chat_friends",
+            headers=_supabase_headers(),
+            params={"friend_email": f"eq.{email}", "limit": 1},
+            timeout=8,
+        )
+        r.raise_for_status()
+        rows = r.json()
+        if rows: return rows[0]["friend_google_id"]
+    except Exception as e:
+        logging.info(f"Supabase find_user_by_email failed: {e}")
+    return None
 
 
 # ─────────────────────────────── helpers ────────────────────────────────────
@@ -246,6 +330,84 @@ def remove_subscription():
         with _state_lock:
             push_subscriptions.pop(gid, None)
     return jsonify({"ok": True})
+
+
+# ─────────────────────────────── account dashboard ───────────────────────────
+def require_google():
+    if not session.get("google_id"):
+        abort(401)
+
+@app.route("/account")
+def account():
+    if not session.get("google_id"):
+        flash("Sign in with Google to view your account.","error")
+        return redirect(url_for("index"))
+    gid = session["google_id"]
+    friends = sb_list_friends(gid)
+    return render_template(
+        "account.html",
+        username=session.get("name","Guest"),
+        google_email=session.get("google_email",""),
+        google_id=gid,
+        has_subscription=gid in push_subscriptions,
+        friends=friends,
+        supabase_available=supabase_available(),
+    )
+
+@app.route("/account/friends/add", methods=["POST"])
+def add_friend():
+    check_csrf()
+    require_google()
+    gid = session["google_id"]
+    email = (request.form.get("friend_email") or "").strip().lower()
+    if not email or "@" not in email:
+        flash("Enter a valid email address.","error")
+        return redirect(url_for("account"))
+    if email == (session.get("google_email") or "").lower():
+        flash("You can't add yourself.","error")
+        return redirect(url_for("account"))
+
+    friend_gid = sb_find_user_by_email(email)
+    ok, err = sb_add_friend(
+        owner_google_id=gid,
+        owner_email=session.get("google_email",""),
+        friend_google_id=friend_gid or f"pending:{email}",
+        friend_email=email,
+        friend_display_name=None,
+    )
+    if ok:
+        if friend_gid:
+            flash(f"Added {email} as a friend.","info")
+        else:
+            flash(f"Added {email}. They'll be fully linked once they sign in with Google and are added back.","info")
+    else:
+        flash(f"Couldn't add friend: {err or 'unknown error'}","error")
+    return redirect(url_for("account"))
+
+@app.route("/account/friends/remove", methods=["POST"])
+def remove_friend():
+    check_csrf()
+    require_google()
+    gid = session["google_id"]
+    friend_gid = request.form.get("friend_google_id","")
+    if friend_gid and sb_remove_friend(gid, friend_gid):
+        flash("Friend removed.","info")
+    else:
+        flash("Couldn't remove friend.","error")
+    return redirect(url_for("account"))
+
+@app.route("/account/test-push", methods=["POST"])
+def test_push():
+    check_csrf()
+    require_google()
+    gid = session["google_id"]
+    if gid not in push_subscriptions:
+        flash("No push subscription found. Open a room first to enable notifications.","error")
+        return redirect(url_for("account"))
+    send_push(gid, "Private.chat", "This is a test notification. Push is working.")
+    flash("Test notification sent.","info")
+    return redirect(url_for("account"))
+
 
 @app.route("/admin/login", methods=["GET","POST"])
 def admin_login():
@@ -453,6 +615,27 @@ def admin_announce():
             flash("Room not found.","error")
     return redirect(url_for("admin_panel"))
 
+
+
+@app.route("/admin/push-broadcast", methods=["POST"])
+def admin_push_broadcast():
+    require_admin(); check_csrf()
+    title = (request.form.get("push_title") or "Private.chat").strip()[:80]
+    body  = (request.form.get("push_body") or "").strip()
+    if not body:
+        flash("Push message can't be empty.","error")
+        return redirect(url_for("admin_panel"))
+    if len(body) > 500:
+        flash("Push message is too long.","error")
+        return redirect(url_for("admin_panel"))
+    with _state_lock:
+        targets = list(push_subscriptions.keys())
+    sent = 0
+    for gid in targets:
+        send_push(gid, title, body)
+        sent += 1
+    flash(f"Push sent to {sent} subscribed device(s).","info")
+    return redirect(url_for("admin_panel"))
 
 
 @app.route("/join", methods=["GET","POST"])

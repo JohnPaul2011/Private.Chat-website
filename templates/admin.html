@@ -222,6 +222,26 @@
       </form>
     </div>
 
+    <div class="section-eyebrow">Push Notifications</div>
+    <div class="announce-box">
+      <div class="announce-head">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/>
+        </svg>
+        <strong>Send push notification</strong>
+      </div>
+      <form id="pushForm">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <input type="text" name="push_title" placeholder="Title (optional)" maxlength="80"
+               style="width:100%;padding:9px 10px;border-radius:6px;border:1px solid var(--ops-border);background:var(--ops-panel);color:var(--ops-text);font-family:inherit;font-size:13px;margin-bottom:8px;">
+        <textarea name="push_body" placeholder="Notification text, delivered directly to devices — bypasses chat and works even if the app is closed…" required maxlength="500"></textarea>
+        <div class="announce-footer">
+          <span class="announce-hint">Sent to every device with push enabled, regardless of room</span>
+          <button type="submit">Send Push</button>
+        </div>
+      </form>
+    </div>
+
     <div class="section-eyebrow">Rooms</div>
     <div id="roomsContainer">
       <p id="noRooms">No active rooms.</p>
@@ -394,6 +414,28 @@
       body
     });
     form.querySelector("textarea").value = "";
+  });
+
+  document.getElementById("pushForm").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const form = e.target;
+    const body = new URLSearchParams(new FormData(form)).toString();
+    const btn = form.querySelector("button[type=submit]");
+    const originalLabel = btn.textContent;
+    btn.disabled = true; btn.textContent = "Sending…";
+    try {
+      const res = await fetch("/admin/push-broadcast", {
+        method: "POST",
+        headers: { "X-CSRF-Token": CSRF, "Content-Type": "application/x-www-form-urlencoded" },
+        body
+      });
+      btn.textContent = res.ok ? "Sent ✓" : "Failed";
+    } catch (err) {
+      btn.textContent = "Failed";
+    }
+    form.querySelector("textarea").value = "";
+    form.querySelector("input[name=push_title]").value = "";
+    setTimeout(() => { btn.disabled = false; btn.textContent = originalLabel; }, 1800);
   });
 
   // ── initial render + live updates ──────────────────────────────────────
