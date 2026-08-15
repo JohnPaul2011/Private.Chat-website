@@ -287,6 +287,42 @@ muteBtn.addEventListener("click", () => {
   applyMute();
 });
 
+// ── Push notifications (only if signed in with Google) ─────────────────
+function urlBase64ToUint8Array(base64String) {
+  const padding = "=".repeat((4 - base64String.length % 4) % 4);
+  const base64 = (base64String + padding).replace(/-/g, "+").replace(/_/g, "/");
+  const rawData = atob(base64);
+  return Uint8Array.from([...rawData].map(c => c.charCodeAt(0)));
+}
+async function setupPush() {
+  const googleSignedIn = {{ "true" if google_signed_in else "false" }};
+  if (!googleSignedIn) return;
+  if (!("serviceWorker" in navigator) || !("PushManager" in window)) return;
+  try {
+    const reg = await navigator.serviceWorker.register("{{ url_for('static', filename='sw.js') }}");
+    const perm = await Notification.requestPermission();
+    if (perm !== "granted") return;
+    const keyRes = await fetch("/vapid-public-key");
+    const { key } = await keyRes.json();
+    if (!key) return;
+    let sub = await reg.pushManager.getSubscription();
+    if (!sub) {
+      sub = await reg.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: urlBase64ToUint8Array(key)
+      });
+    }
+    await fetch("/save-subscription", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-CSRF-Token": "{{ csrf_token() }}" },
+      body: JSON.stringify(sub)
+    });
+  } catch (err) {
+    console.log("Push setup failed:", err);
+  }
+}
+setupPush();
+
 // ── Members panel ──────────────────────────────────────────────────────
 const membersBtn   = document.getElementById("members-btn");
 const membersPanel = document.getElementById("members-panel");

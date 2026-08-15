@@ -6,7 +6,9 @@ from flask_socketio import SocketIO, send, join_room, leave_room, emit
 from werkzeug.security import generate_password_hash, check_password_hash
 from werkzeug.middleware.proxy_fix import ProxyFix
 from colorama import init as init_color
-import time, logging, os, re, hmac, hashlib, secrets, base64, struct, datetime, threading, uuid
+from pywebpush import webpush, WebPushException
+from authlib.integrations.flask_client import OAuth
+import time, logging, os, re, hmac, hashlib, secrets, base64, struct, datetime, threading, uuid, json
 
 _sysrand = secrets.SystemRandom()
 
@@ -44,6 +46,46 @@ RATE_LIMIT_WINDOW, RATE_LIMIT_MAX = 5, 15
 MAX_ROOMS = 1000
 _create_attempts = {}
 CREATE_MAX, CREATE_WINDOW = 10, 60
+
+# ─────────────────────────────── Google OAuth ───────────────────────────────
+GOOGLE_CLIENT_ID     = os.environ.get("GOOGLE_CLIENT_ID", "")
+GOOGLE_CLIENT_SECRET = os.environ.get("GOOGLE_CLIENT_SECRET", "")
+
+oauth = OAuth(app)
+google_oauth = oauth.register(
+    name="google",
+    client_id=GOOGLE_CLIENT_ID,
+    client_secret=GOOGLE_CLIENT_SECRET,
+    server_metadata_url="https://accounts.google.com/.well-known/openid-configuration",
+    client_kwargs={"scope": "openid email profile"},
+)
+
+# ─────────────────────────────── push notifications ─────────────────────────
+VAPID_PRIVATE_KEY = os.environ.get("VAPID_PRIVATE_KEY", "")
+VAPID_PUBLIC_KEY  = os.environ.get("VAPID_PUBLIC_KEY", "")
+VAPID_CLAIMS      = {"sub": "mailto:admin@example.com"}
+
+push_subscriptions = {}   # {google_id: subscription_dict} -- only linked Google accounts get push
+connected_sids      = {}  # {room_code: set(names currently connected via socket)}
+
+def send_push(google_id, title, body, room=None):
+    if not google_id or not VAPID_PRIVATE_KEY:
+        return
+    with _state_lock:
+        sub = push_subscriptions.get(google_id)
+    if not sub:
+        return
+    try:
+        webpush(
+            subscription_info=sub,
+            data=json.dumps({"title": title, "body": body, "room": room}),
+            vapid_private_key=VAPID_PRIVATE_KEY,
+            vapid_claims=dict(VAPID_CLAIMS),
+        )
+    except WebPushException as e:
+        logging.info(f"Push failed, dropping subscription: {e}")
+        with _state_lock:
+            push_subscriptions.pop(google_id, None)
 
 
 # ─────────────────────────────── helpers ────────────────────────────────────
@@ -143,7 +185,67 @@ def create_rate_limited(key):
 # ─────────────────────────────── chat routes ────────────────────────────────
 @app.route("/")
 def index():
-    return render_template("index.html", username=session.get("name","Guest"))
+    return render_template("index.html", username=session.get("name","Guest"),
+                            google_signed_in=bool(session.get("google_id")))
+
+@app.route("/auth/google/login")
+def google_login():
+    redirect_uri = url_for("google_callback", _external=True)
+    return google_oauth.authorize_redirect(redirect_uri)
+
+@app.route("/auth/google/callback")
+def google_callback():
+    try:
+        token = google_oauth.authorize_access_token()
+        userinfo = token.get("userinfo")
+    except Exception as e:
+        logging.info(f"Google auth failed: {e}")
+        flash("Google sign-in failed.","error")
+        return redirect(url_for("index"))
+    if not userinfo or not userinfo.get("sub"):
+        flash("Google sign-in failed.","error")
+        return redirect(url_for("index"))
+    session.permanent = True
+    session["google_id"] = userinfo["sub"]
+    session["google_email"] = userinfo.get("email","")
+    flash("Signed in with Google. Pick a display name to continue.","info")
+    return redirect(url_for("join"))
+
+@app.route("/auth/google/logout")
+def google_logout():
+    gid = session.pop("google_id", None)
+    session.pop("google_email", None)
+    if gid:
+        with _state_lock:
+            push_subscriptions.pop(gid, None)
+    flash("Signed out of Google.","info")
+    return redirect(url_for("index"))
+
+@app.route("/vapid-public-key")
+def vapid_public_key():
+    return jsonify({"key": VAPID_PUBLIC_KEY})
+
+@app.route("/save-subscription", methods=["POST"])
+def save_subscription():
+    check_csrf()
+    gid = session.get("google_id")
+    if not gid:
+        return jsonify({"ok": False, "reason": "google_signin_required"}), 401
+    sub = request.get_json(silent=True)
+    if not sub or "endpoint" not in sub:
+        return jsonify({"ok": False}), 400
+    with _state_lock:
+        push_subscriptions[gid] = sub
+    return jsonify({"ok": True})
+
+@app.route("/remove-subscription", methods=["POST"])
+def remove_subscription():
+    check_csrf()
+    gid = session.get("google_id")
+    if gid:
+        with _state_lock:
+            push_subscriptions.pop(gid, None)
+    return jsonify({"ok": True})
 
 @app.route("/admin/login", methods=["GET","POST"])
 def admin_login():
@@ -187,6 +289,7 @@ def _sweep_empty_rooms():
             rooms.pop(c, None)
             room_passwords.pop(c, None)
             captured_messages.pop(c, None)
+            connected_sids.pop(c, None)
 
 def _admin_room_snapshot():
     _sweep_empty_rooms()
@@ -290,6 +393,7 @@ def admin_kickall(code):
         if exists:
             room_passwords.pop(code, None)
             rooms.pop(code, None)
+            connected_sids.pop(code, None)
     if exists:
         socketio.emit("kicked", {}, to=code)
         flash(f"Kicked all from {code}.","info")
@@ -319,15 +423,31 @@ def admin_announce():
             with _state_lock:
                 if code in rooms and rooms[code].get("save_history"):
                     rooms[code]["messages"].append(content)
+                google_map = dict(rooms.get(code, {}).get("google_map", {}))
+                members = list(rooms.get(code, {}).get("members", []))
+                online = connected_sids.get(code, set())
             socketio.emit("message", content, to=code)
+            for member in members:
+                if member not in online:
+                    gid = google_map.get(member)
+                    if gid:
+                        send_push(gid, "Announcement", text[:120], room=code)
         flash(f"Announcement sent to {len(codes)} room(s).","info")
     else:
         with _state_lock:
             exists = target in rooms
             if exists and rooms[target].get("save_history"):
                 rooms[target]["messages"].append(content)
+            google_map = dict(rooms.get(target, {}).get("google_map", {})) if exists else {}
+            members = list(rooms.get(target, {}).get("members", [])) if exists else []
+            online = connected_sids.get(target, set())
         if exists:
             socketio.emit("message", content, to=target)
+            for member in members:
+                if member not in online:
+                    gid = google_map.get(member)
+                    if gid:
+                        send_push(gid, "Announcement", text[:120], room=target)
             flash(f"Announcement sent to {target}.","info")
         else:
             flash("Room not found.","error")
@@ -369,8 +489,11 @@ def join():
         session.permanent = True
         session["room"] = code
         session["name"] = name
+        if session.get("google_id"):
+            with _state_lock:
+                rooms[code].setdefault("google_map", {})[name] = session["google_id"]
         return redirect(url_for("room"))
-    return render_template("join.html", username=session.get("name","Guest"))
+    return render_template("join.html", username=session.get("name","Guest"), google_signed_in=bool(session.get("google_id")))
 
 @app.route("/create", methods=["GET","POST"])
 def create():
@@ -406,14 +529,16 @@ def create():
             return render_template("create.html", username=name)
         save_history = request.form.get("save_history") == "1"
         with _state_lock:
-            rooms[code] = {"members":[], "messages":[], "save_history": save_history}
+            rooms[code] = {"members":[], "messages":[], "save_history": save_history, "google_map": {}}
             room_passwords[code] = pw
+            if session.get("google_id"):
+                rooms[code]["google_map"][name] = session["google_id"]
         _push_admin_update()
         session.permanent = True
         session["room"] = code
         session["name"] = name
         return redirect(url_for("room"))
-    return render_template("create.html", username=session.get("name","Guest"))
+    return render_template("create.html", username=session.get("name","Guest"), google_signed_in=bool(session.get("google_id")))
 
 @app.route("/room")
 def room():
@@ -422,11 +547,14 @@ def room():
         return redirect("/")
     history = rooms[r]["messages"] if rooms[r].get("save_history") else []
     seen = rooms[r].get("seen", {}) if rooms[r].get("save_history") else {}
-    return render_template("room.html", code=r, messages=history, username=session["name"], seen=seen)
+    return render_template("room.html", code=r, messages=history, username=session["name"], seen=seen,
+                            google_signed_in=bool(session.get("google_id")))
 
 @app.route("/logout")
 def logout():
     session.pop("name",None)
+    session.pop("google_id",None)
+    session.pop("google_email",None)
     flash("You have been logged out.","info")
     return redirect(url_for("index"))
 
@@ -462,7 +590,14 @@ def message(data):
                 rooms[r]["messages"] = rooms[r]["messages"][-500:]
         if r in capturing_rooms:
             captured_messages.setdefault(r, []).append(content)
+        google_map = dict(rooms[r].get("google_map", {}))
+        offline_members = [m for m in rooms[r]["members"]
+                            if m != name and m not in connected_sids.get(r, set())]
     _push_admin_update()
+    for member in offline_members:
+        gid = google_map.get(member)
+        if gid:
+            send_push(gid, f"New message in {r}", f"{name} sent a message", room=r)
 
 @socketio.on("latency_ping")
 def latency_ping(data):
@@ -520,6 +655,7 @@ def connect(auth=None):
     with _state_lock:
         if name not in rooms[r]["members"]: rooms[r]["members"].append(name)
         rooms[r].pop("empty_since", None)
+        connected_sids.setdefault(r, set()).add(name)
         members = list(rooms[r]["members"])
     send({"name":"System","type":"text","message":f"{name} entered the room",
           "timestamp":time.strftime('%H:%M %p')}, to=r)
@@ -534,9 +670,11 @@ def disconnect():
         with _state_lock:
             removed = name in rooms[r]["members"]
             if removed: rooms[r]["members"].remove(name)
+            connected_sids.get(r, set()).discard(name)
             empty = removed and not rooms[r]["members"]
             if empty:
                 rooms[r]["empty_since"] = time.time()   # kept around briefly for admin export, see ROOM_EMPTY_GRACE
+                connected_sids.pop(r, None)
             members = list(rooms[r]["members"]) if r in rooms else []
         if removed:
             send({"name":"System","type":"text","message":f"{name} left the room",
