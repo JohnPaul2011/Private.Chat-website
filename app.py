@@ -171,6 +171,42 @@ def sb_find_user_by_email(email):
         logging.info(f"Supabase find_user_by_email failed: {e}")
     return None
 
+def sb_get_profile(google_id):
+    if not supabase_available() or not google_id: return None
+    try:
+        r = _requests.get(
+            f"{SUPABASE_URL}/rest/v1/chat_profiles",
+            headers=_supabase_headers(),
+            params={"google_id": f"eq.{google_id}", "limit": 1},
+            timeout=8,
+        )
+        r.raise_for_status()
+        rows = r.json()
+        return rows[0] if rows else None
+    except Exception as e:
+        logging.info(f"Supabase get_profile failed: {e}")
+        return None
+
+def sb_upsert_profile(google_id, email, display_name):
+    if not supabase_available(): return False, "Storage not configured"
+    try:
+        r = _requests.post(
+            f"{SUPABASE_URL}/rest/v1/chat_profiles",
+            headers={**_supabase_headers(), "Prefer": "resolution=merge-duplicates"},
+            json={
+                "google_id": google_id,
+                "email": email,
+                "display_name": display_name,
+                "updated_at": datetime.datetime.utcnow().isoformat(),
+            },
+            timeout=8,
+        )
+        if r.status_code >= 400:
+            return False, r.text[:200]
+        return True, None
+    except Exception as e:
+        return False, str(e)
+
 
 # ─────────────────────────────── helpers ────────────────────────────────────
 NAME_RE = re.compile(r"^[A-Za-z0-9_\-]{1,24}$")
@@ -292,6 +328,17 @@ def google_callback():
     session.permanent = True
     session["google_id"] = userinfo["sub"]
     session["google_email"] = userinfo.get("email","")
+
+    profile = sb_get_profile(userinfo["sub"])
+    if profile and profile.get("display_name"):
+        session["preferred_name"] = profile["display_name"]
+    elif userinfo.get("name"):
+        # first sign-in: seed a profile from Google's name so it's editable in /account
+        seed_name = re.sub(r"[^A-Za-z0-9_\- ]", "", userinfo["name"])[:24].strip()
+        if seed_name:
+            session["preferred_name"] = seed_name
+            sb_upsert_profile(userinfo["sub"], userinfo.get("email",""), seed_name)
+
     flash("Signed in with Google. Pick a display name to continue.","info")
     return redirect(url_for("join"))
 
@@ -299,6 +346,7 @@ def google_callback():
 def google_logout():
     gid = session.pop("google_id", None)
     session.pop("google_email", None)
+    session.pop("preferred_name", None)
     if gid:
         with _state_lock:
             push_subscriptions.pop(gid, None)
@@ -344,6 +392,8 @@ def account():
         return redirect(url_for("index"))
     gid = session["google_id"]
     friends = sb_list_friends(gid)
+    profile = sb_get_profile(gid)
+    preferred_name = (profile or {}).get("display_name") or session.get("preferred_name","")
     return render_template(
         "account.html",
         username=session.get("name","Guest"),
@@ -352,7 +402,28 @@ def account():
         has_subscription=gid in push_subscriptions,
         friends=friends,
         supabase_available=supabase_available(),
+        preferred_name=preferred_name,
     )
+
+@app.route("/account/update-name", methods=["POST"])
+def update_name():
+    check_csrf()
+    require_google()
+    gid = session["google_id"]
+    new_name = (request.form.get("display_name") or "").strip()
+    if not NAME_RE.match(new_name):
+        flash("Name must be 1-24 characters, letters/numbers/_/- only.","error")
+        return redirect(url_for("account"))
+    if new_name.lower() in BAD_USERNAMES:
+        flash("That name isn't allowed.","error")
+        return redirect(url_for("account"))
+    ok, err = sb_upsert_profile(gid, session.get("google_email",""), new_name)
+    if ok:
+        session["preferred_name"] = new_name
+        flash("Display name updated. It'll auto-fill next time you join or create a room.","info")
+    else:
+        flash(f"Couldn't update name: {err or 'unknown error'}","error")
+    return redirect(url_for("account"))
 
 @app.route("/account/friends/add", methods=["POST"])
 def add_friend():
@@ -676,7 +747,11 @@ def join():
             with _state_lock:
                 rooms[code].setdefault("google_map", {})[name] = session["google_id"]
         return redirect(url_for("room"))
-    return render_template("join.html", username=session.get("name","Guest"), google_signed_in=bool(session.get("google_id")))
+    return render_template(
+        "join.html",
+        username=session.get("name") or session.get("preferred_name") or "Guest",
+        google_signed_in=bool(session.get("google_id")),
+    )
 
 @app.route("/create", methods=["GET","POST"])
 def create():
@@ -721,7 +796,11 @@ def create():
         session["room"] = code
         session["name"] = name
         return redirect(url_for("room"))
-    return render_template("create.html", username=session.get("name","Guest"), google_signed_in=bool(session.get("google_id")))
+    return render_template(
+        "create.html",
+        username=session.get("name") or session.get("preferred_name") or "Guest",
+        google_signed_in=bool(session.get("google_id")),
+    )
 
 @app.route("/room")
 def room():

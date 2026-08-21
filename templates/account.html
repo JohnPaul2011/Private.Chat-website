@@ -120,12 +120,24 @@
         <span class="acct-label">Google ID</span>
         <span class="acct-value" style="font-size:11px;">{{ google_id }}</span>
       </div>
-      <div class="acct-row">
-        <span class="acct-label">Current display name</span>
-        <span class="acct-value">{{ username }}</span>
-      </div>
       <div style="margin-top:14px;">
         <a href="/auth/google/logout" class="acct-btn danger" style="text-decoration:none;display:inline-block;">Sign out of Google</a>
+      </div>
+    </div>
+
+    <div class="acct-card">
+      <h2>Profile</h2>
+      <p class="empty-state" style="padding-top:0;margin-bottom:10px;">
+        This name auto-fills when you join or create a room. Each room still lets you change it before entering.
+      </p>
+      <form method="POST" action="/account/update-name" class="add-friend-form">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <input type="text" name="display_name" value="{{ preferred_name }}" placeholder="Display name" maxlength="24" pattern="[A-Za-z0-9_\-]{1,24}" required>
+        <button type="submit" class="acct-btn">Save</button>
+      </form>
+      <div class="acct-row" style="margin-top:10px;border-top:1px solid var(--form-border);padding-top:10px;">
+        <span class="acct-label">Current session name</span>
+        <span class="acct-value">{{ username }}</span>
       </div>
     </div>
 
