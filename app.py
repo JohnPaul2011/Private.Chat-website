@@ -207,6 +207,79 @@ def sb_upsert_profile(google_id, email, display_name):
     except Exception as e:
         return False, str(e)
 
+def sb_add_notification(owner_google_id, kind, title, body="", room_code=None):
+    if not supabase_available() or not owner_google_id: return False
+    try:
+        r = _requests.post(
+            f"{SUPABASE_URL}/rest/v1/chat_notifications",
+            headers=_supabase_headers(),
+            json={
+                "owner_google_id": owner_google_id,
+                "kind": kind,
+                "title": title[:200],
+                "body": (body or "")[:500],
+                "room_code": room_code,
+            },
+            timeout=8,
+        )
+        return r.status_code < 400
+    except Exception as e:
+        logging.info(f"Supabase add_notification failed: {e}")
+        return False
+
+def sb_list_notifications(owner_google_id, limit=30):
+    if not supabase_available() or not owner_google_id: return []
+    try:
+        r = _requests.get(
+            f"{SUPABASE_URL}/rest/v1/chat_notifications",
+            headers=_supabase_headers(),
+            params={
+                "owner_google_id": f"eq.{owner_google_id}",
+                "order": "created_at.desc",
+                "limit": limit,
+            },
+            timeout=8,
+        )
+        r.raise_for_status()
+        return r.json()
+    except Exception as e:
+        logging.info(f"Supabase list_notifications failed: {e}")
+        return []
+
+def sb_unread_notification_count(owner_google_id):
+    if not supabase_available() or not owner_google_id: return 0
+    try:
+        r = _requests.get(
+            f"{SUPABASE_URL}/rest/v1/chat_notifications",
+            headers={**_supabase_headers(), "Prefer": "count=exact"},
+            params={"owner_google_id": f"eq.{owner_google_id}", "read": "eq.false", "select": "id"},
+            timeout=8,
+        )
+        r.raise_for_status()
+        cr = r.headers.get("Content-Range","")   # e.g. "0-4/5"
+        if "/" in cr:
+            total = cr.split("/")[-1]
+            return int(total) if total.isdigit() else 0
+        return len(r.json())
+    except Exception as e:
+        logging.info(f"Supabase unread_notification_count failed: {e}")
+        return 0
+
+def sb_mark_notifications_read(owner_google_id):
+    if not supabase_available() or not owner_google_id: return False
+    try:
+        r = _requests.patch(
+            f"{SUPABASE_URL}/rest/v1/chat_notifications",
+            headers=_supabase_headers(),
+            params={"owner_google_id": f"eq.{owner_google_id}", "read": "eq.false"},
+            json={"read": True},
+            timeout=8,
+        )
+        return r.status_code < 400
+    except Exception as e:
+        logging.info(f"Supabase mark_notifications_read failed: {e}")
+        return False
+
 
 # ─────────────────────────────── helpers ────────────────────────────────────
 NAME_RE = re.compile(r"^[A-Za-z0-9_\-]{1,24}$")
@@ -305,8 +378,18 @@ def create_rate_limited(key):
 # ─────────────────────────────── chat routes ────────────────────────────────
 @app.route("/")
 def index():
-    return render_template("index.html", username=session.get("name","Guest"),
-                            google_signed_in=bool(session.get("google_id")))
+    gid = session.get("google_id")
+    friends, notifications = [], []
+    if gid:
+        friends = sb_list_friends(gid)
+        notifications = sb_list_notifications(gid, limit=20)
+    return render_template(
+        "index.html",
+        username=session.get("name","Guest"),
+        google_signed_in=bool(gid),
+        home_friends=friends,
+        home_notifications=notifications,
+    )
 
 @app.route("/auth/google/login")
 def google_login():
@@ -449,6 +532,13 @@ def add_friend():
     if ok:
         if friend_gid:
             flash(f"Added {email} as a friend.","info")
+            my_email = session.get("google_email","")
+            sb_add_notification(
+                friend_gid, "friend_added",
+                "New friend added you",
+                f"{my_email or 'Someone'} added you as a friend.",
+            )
+            send_push(friend_gid, "New friend", f"{my_email or 'Someone'} added you as a friend.")
         else:
             flash(f"Added {email}. They'll be fully linked once they sign in with Google and are added back.","info")
     else:
@@ -466,6 +556,20 @@ def remove_friend():
     else:
         flash("Couldn't remove friend.","error")
     return redirect(url_for("account"))
+
+@app.route("/api/notifications/mark-read", methods=["POST"])
+def api_mark_notifications_read():
+    check_csrf()
+    require_google()
+    ok = sb_mark_notifications_read(session["google_id"])
+    return jsonify({"ok": ok})
+
+@app.route("/api/notifications/unread-count")
+def api_unread_count():
+    gid = session.get("google_id")
+    if not gid:
+        return jsonify({"count": 0})
+    return jsonify({"count": sb_unread_notification_count(gid)})
 
 @app.route("/account/test-push", methods=["POST"])
 def test_push():
@@ -860,6 +964,7 @@ def message(data):
         gid = google_map.get(member)
         if gid:
             send_push(gid, f"New message in {r}", f"{name} sent a message", room=r)
+            sb_add_notification(gid, "message", f"New message in {r}", f"{name} sent a message", room_code=r)
 
 @socketio.on("latency_ping")
 def latency_ping(data):
