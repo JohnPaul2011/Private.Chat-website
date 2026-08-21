@@ -169,7 +169,7 @@ a:hover { text-decoration: underline; }
   display: inline-flex;
   align-items: center;
   gap: 10px;
-  width: 250px;
+  width: 170px;
   padding: 8px 20px 8px 8px;
   border-radius: 50px;
   border: 1px solid var(--nav-border);
@@ -207,7 +207,7 @@ a:hover { text-decoration: underline; }
 
 /* compact variant for the navbar (icon still visible, tighter padding, narrower fixed width) */
 .google-pill--nav {
-  width: 210px;
+  width: 150px;
   padding: 6px 16px 6px 6px;
   font-size: 13px;
 }
