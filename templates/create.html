@@ -28,17 +28,6 @@
   <div class="container">
     <h2>Create a Room</h2>
 
-    {% if not google_signed_in %}
-    <p style="text-align:center;font-size:13px;margin-bottom:12px;">
-      <a href="/auth/google/login">Sign in with Google</a> to get push notifications (optional)
-    </p>
-    {% else %}
-    <p style="text-align:center;font-size:13px;margin-bottom:12px;color:#2e7d32;">
-      Signed in with Google · push notifications enabled ·
-      <a href="/auth/google/logout">sign out</a>
-    </p>
-    {% endif %}
-
     <form method="POST" id="createForm">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <input name="name" placeholder="Username" value="{{ username }}" required autocomplete="off">
@@ -57,6 +46,11 @@
       </label>
       <button type="submit">Create</button>
     </form>
+
+    <div class="google-pill-block">
+      {% include "_google_pill.html" %}
+    </div>
+
     <p><a href="/join">Join an existing room →</a></p>
   </div>
   <script>

@@ -157,6 +157,70 @@ a:hover { text-decoration: underline; }
 [data-theme="light"] .icon-sun  { display: none; }
 :root:not([data-theme="dark"]) .icon-sun { display: none; } /* fallback if attr missing */
 
+/* Title bar action group (theme toggle + google pill sit together) */
+.title-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+/* ── Google sign-in pill ───────────────────────────────── */
+.google-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 20px 8px 8px;
+  border-radius: 50px;
+  border: 1px solid var(--nav-border);
+  background: var(--form-bg);
+  color: var(--wa-text);
+  font-family: var(--font-main);
+  font-size: 14px;
+  font-weight: 500;
+  text-decoration: none !important;
+  cursor: pointer;
+  transition: background .15s, border-color .15s, box-shadow .15s;
+  white-space: nowrap;
+}
+.google-pill:hover {
+  background: var(--nav-hover-bg);
+  box-shadow: 0 1px 3px rgba(0,0,0,.12);
+}
+.google-pill svg { width: 20px; height: 20px; flex-shrink: 0; }
+
+/* dark theme: pill flips to a filled dark pill, like the reference */
+[data-theme="dark"] .google-pill {
+  background: #131314;
+  border-color: #131314;
+  color: #e3e3e3;
+}
+[data-theme="dark"] .google-pill:hover { background: #1b1b1c; }
+
+/* compact variant for the navbar (icon still visible, tighter padding) */
+.google-pill--nav {
+  padding: 6px 16px 6px 6px;
+  font-size: 13px;
+}
+
+/* signed-in state pill (shows account instead of sign-in) */
+.google-pill--signed-in {
+  background: rgba(37,211,102,0.10);
+  border-color: rgba(37,211,102,0.35);
+  color: var(--wa-green-dark);
+}
+[data-theme="dark"] .google-pill--signed-in {
+  background: rgba(37,211,102,0.12);
+  border-color: rgba(37,211,102,0.4);
+  color: var(--wa-green);
+}
+.google-pill--signed-in:hover { background: rgba(37,211,102,0.18); }
+
+.google-pill-block {
+  display: flex;
+  justify-content: center;
+  margin: 14px 0 4px;
+}
+
 /* ── Navigation ────────────────────────────────────────── */
 ul {
   list-style: none;
