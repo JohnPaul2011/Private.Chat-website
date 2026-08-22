@@ -359,6 +359,12 @@ ul {
 }
 li { position: relative; }
 .li-right { margin-left: auto; }
+.nav-pill-slot {
+  display: flex;
+  align-items: center;
+  padding: 0 10px 0 4px;
+}
+.nav-pill-slot .google-pill--nav { margin: 0; }
 
 li a, .dropbtn {
   display: flex;

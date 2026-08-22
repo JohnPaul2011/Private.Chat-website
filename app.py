@@ -471,7 +471,6 @@ def require_google():
 @app.route("/account")
 def account():
     if not session.get("google_id"):
-        flash("Sign in with Google to view your account.","error")
         return redirect(url_for("index"))
     gid = session["google_id"]
     friends = sb_list_friends(gid)

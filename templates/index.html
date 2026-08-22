@@ -73,8 +73,6 @@
         </span>
         <span class="toggle-label">Theme</span>
       </button>
-      {% set pill_class = "google-pill--nav" %}
-      {% include "_google_pill.html" %}
     </div>
   </div>
 
@@ -126,6 +124,10 @@
         </svg>
         <span class="nav-label">Help</span>
       </a>
+    </li>
+    <li class="nav-pill-slot">
+      {% set pill_class = "google-pill--nav" %}
+      {% include "_google_pill.html" %}
     </li>
   </ul>
 
