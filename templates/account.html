@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Private.chat — Account</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}"/>
+  <script>
+    (function(){
+      const saved=localStorage.getItem("theme");
+      const sys=window.matchMedia("(prefers-color-scheme: dark)").matches;
+      document.documentElement.setAttribute("data-theme", saved||(sys?"dark":"light"));
+    })();
+    window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change",(e)=>{
+      if(!localStorage.getItem("theme")) document.documentElement.setAttribute("data-theme",e.matches?"dark":"light");
+    });
+    setTimeout(()=>{
+      document.querySelectorAll(".flash-msg").forEach(m=>{m.classList.add("hide");setTimeout(()=>m.remove(),800);});
+    },3000);
+  </script>
+  <style>
+    .acct-wrap {
+      max-width: 560px;
+      margin: 40px auto;
+      padding: 0 16px 60px;
+      font-family: var(--font-main);
+    }
+    .acct-card {
+      background: var(--form-bg);
+      border: 1px solid var(--form-border);
+      border-radius: var(--radius);
+      padding: 20px;
+      margin-bottom: 18px;
+    }
+    .acct-card h2 {
+      font-size: 15px;
+      margin-bottom: 14px;
+      color: var(--wa-text);
+    }
+    .acct-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 8px 0;
+      border-bottom: 1px solid var(--form-border);
+      font-size: 14px;
+    }
+    .acct-row:last-child { border-bottom: none; }
+    .acct-label { color: var(--wa-sub); }
+    .acct-value { color: var(--wa-text); font-weight: 500; word-break: break-all; text-align: right; max-width: 60%; }
+    .status-pill {
+      display: inline-block;
+      padding: 3px 10px;
+      border-radius: 100px;
+      font-size: 12px;
+      font-weight: 600;
+    }
+    .status-on  { background: rgba(37,211,102,0.15); color: var(--wa-green-dark); }
+    .status-off { background: rgba(198,40,40,0.12); color: #c62828; }
+    .acct-btn {
+      padding: 9px 16px;
+      border-radius: 100px;
+      border: 1px solid var(--wa-green-dark);
+      background: none;
+      color: var(--wa-green-dark);
+      font-weight: 600;
+      font-size: 13px;
+      cursor: pointer;
+      font-family: var(--font-main);
+    }
+    .acct-btn:hover { background: var(--wa-green-dark); color: #fff; }
+    .acct-btn.danger { border-color: #c62828; color: #c62828; }
+    .acct-btn.danger:hover { background: #c62828; color: #fff; }
+    .friend-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 10px 0;
+      border-bottom: 1px solid var(--form-border);
+    }
+    .friend-row:last-child { border-bottom: none; }
+    .friend-email { font-size: 14px; color: var(--wa-text); }
+    .friend-status { font-size: 11px; color: var(--wa-sub); }
+    .add-friend-form {
+      display: flex;
+      gap: 8px;
+      margin-top: 12px;
+    }
+    .add-friend-form input {
+      flex: 1;
+      min-width: 0;
+      padding: 9px 12px;
+      border-radius: 100px;
+      border: 1px solid var(--form-border);
+      background: var(--form-input-bg);
+      color: var(--wa-text);
+      font-family: var(--font-main);
+      font-size: 13px;
+    }
+    .add-friend-form .acct-btn {
+      flex: 0 0 auto;
+      width: auto;
+      white-space: nowrap;
+    }
+    .empty-state { color: var(--wa-sub); font-size: 13px; padding: 10px 0; }
+    .back-link { display:inline-block; margin-bottom: 16px; font-size: 13px; }
+  </style>
+</head>
+<body>
+  {% with messages = get_flashed_messages(with_categories=true) %}
+  {% if messages %}{% for category, message in messages %}
+  <div class="flash-msg flash-{{ category }}">{{ message }}</div>
+  {% endfor %}{% endif %}{% endwith %}
+
+  <div class="acct-wrap">
+    <a href="/" class="back-link">← Back home</a>
+    <h1 style="font-size:22px;margin-bottom:20px;">Account</h1>
+
+    <div class="acct-card">
+      <h2>Google Account</h2>
+      <div class="acct-row">
+        <span class="acct-label">Email</span>
+        <span class="acct-value">{{ google_email or "—" }}</span>
+      </div>
+      <div class="acct-row">
+        <span class="acct-label">Google ID</span>
+        <span class="acct-value" style="font-size:11px;">{{ google_id }}</span>
+      </div>
+      <div style="margin-top:14px;">
+        <a href="/auth/google/logout" class="acct-btn danger" style="text-decoration:none;display:inline-block;">Sign out of Google</a>
+      </div>
+    </div>
+
+    <div class="acct-card">
+      <h2>Profile</h2>
+      <p class="empty-state" style="padding-top:0;margin-bottom:10px;">
+        This name auto-fills when you join or create a room. Each room still lets you change it before entering.
+      </p>
+      <form method="POST" action="/account/update-name" class="add-friend-form">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <input type="text" name="display_name" value="{{ preferred_name }}" placeholder="Display name" maxlength="24" pattern="[A-Za-z0-9_\-]{1,24}" required>
+        <button type="submit" class="acct-btn">Save</button>
+      </form>
+      <div class="acct-row" style="margin-top:10px;border-top:1px solid var(--form-border);padding-top:10px;">
+        <span class="acct-label">Current session name</span>
+        <span class="acct-value">{{ username }}</span>
+      </div>
+    </div>
+
+    <div class="acct-card">
+      <h2>Push Notifications</h2>
+      <div class="acct-row">
+        <span class="acct-label">Status</span>
+        <span class="status-pill {{ 'status-on' if has_subscription else 'status-off' }}">
+          {{ "Enabled" if has_subscription else "Not enabled" }}
+        </span>
+      </div>
+      {% if not has_subscription %}
+      <p class="empty-state">Open a chat room once to enable push — the browser will ask for notification permission there.</p>
+      {% endif %}
+      <form method="POST" action="/account/test-push" style="margin-top:12px;">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <button type="submit" class="acct-btn" {{ "disabled" if not has_subscription else "" }}>
+          Send test notification
+        </button>
+      </form>
+    </div>
+
+    <div class="acct-card">
+      <h2>Friends</h2>
+      {% if not supabase_available %}
+      <p class="empty-state">Friends storage isn't configured on the server yet.</p>
+      {% else %}
+        {% if friends %}
+          {% for f in friends %}
+          <div class="friend-row">
+            <div>
+              <div class="friend-email">{{ f.friend_email or f.friend_google_id }}</div>
+              <div class="friend-status">Linked</div>
+            </div>
+            <form method="POST" action="/account/friends/remove">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <input type="hidden" name="friend_google_id" value="{{ f.friend_google_id }}">
+              <button type="submit" class="acct-btn danger" style="padding:5px 12px;font-size:12px;">Remove</button>
+            </form>
+          </div>
+          {% endfor %}
+        {% else %}
+          <p class="empty-state">No friends added yet.</p>
+        {% endif %}
+
+        <form method="POST" action="/account/friends/add" class="add-friend-form">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <input type="email" name="friend_email" placeholder="Friend's Google email" required>
+          <button type="submit" class="acct-btn">Send request</button>
+        </form>
+        <p class="empty-state" style="padding-top:8px;">
+          Sends a friend request — they'll need to accept it before you're linked.
+        </p>
+      {% endif %}
+    </div>
+  </div>
+</body>
+</html>

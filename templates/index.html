@@ -1,63 +1,319 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="light">
 <head>
-  <meta charset="UTF-8" />
+  <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>Private.chat</title>
-  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
-  <script
-      src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"
-      integrity="sha512-q/dWJ3kcmjBLU4Qc47E4A9kTB4m3wuTY7vkFJDTZKjTs8jhyGQnaUrxa0Ytd0ssMZhbNua9hE+E7Qv1j+DyZwA=="
-      crossorigin="anonymous"
-    ></script>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}"/>
+  <script src="{{ url_for('static', filename='socket.io.min.js')}}"></script>
   <script>
+    // Apply theme before render to avoid flash.
+    // Priority: 1) user's manual saved choice, 2) OS preference, 3) light
+    (function() {
+      const saved = localStorage.getItem("theme");
+      const sysDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+      const t = saved || (sysDark ? "dark" : "light");
+      document.documentElement.setAttribute("data-theme", t);
+    })();
+
+    // If user hasn't manually chosen, keep in sync with OS changes live
+    window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", (e) => {
+      if (!localStorage.getItem("theme")) {
+        document.documentElement.setAttribute("data-theme", e.matches ? "dark" : "light");
+      }
+    });
+
     setTimeout(() => {
-      document.querySelectorAll(".flash-msg").forEach(msg => {
-        msg.classList.add("hide");
-        setTimeout(() => msg.remove(), 800);
+      document.querySelectorAll(".flash-msg").forEach(m => {
+        m.classList.add("hide");
+        setTimeout(() => m.remove(), 800);
       });
     }, 3000);
-  </script> 
+
+    function toggleTheme() {
+      const html = document.documentElement;
+      const next = html.getAttribute("data-theme") === "dark" ? "light" : "dark";
+      html.setAttribute("data-theme", next);
+      localStorage.setItem("theme", next);  // manual override saved
+    }
+  </script>
 </head>
 <body>
 
   {% with messages = get_flashed_messages(with_categories=true) %}
   {% if messages %}
-      {% for category, message in messages %}
-      <div class="flash-msg flash-{{ category }}">{{ message }}</div>
-      {% endfor %}
+    {% for category, message in messages %}
+    <div class="flash-msg flash-{{ category }}">{{ message }}</div>
+    {% endfor %}
   {% endif %}
   {% endwith %}
-  
+
   <div class="title">
-    <h1>Private.chat</h1>
+    <div class="title-left">
+      <h1>Private.chat</h1>
       <h3>Hello, {{ username }}</h3>
+    </div>
+    <div class="title-actions">
+      <button class="theme-toggle" onclick="toggleTheme()" title="Toggle theme">
+        <!-- Moon icon (shown in light mode) -->
+        <span class="icon-moon">
+          <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M21 12.79A9 9 0 1 1 11.21 3a7 7 0 0 0 9.79 9.79z"/>
+          </svg>
+        </span>
+        <!-- Sun icon (shown in dark mode) -->
+        <span class="icon-sun">
+          <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="5"/>
+            <line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/>
+            <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/>
+            <line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/>
+            <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/>
+          </svg>
+        </span>
+        <span class="toggle-label">Theme</span>
+      </button>
+    </div>
   </div>
 
   <ul>
-    <li><a class="active" href="/">Home</a></li>
-    <!--<li><a href="/Chat">Chat</a></li>!-->
+    <li>
+      <a class="active" href="/">
+        <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/>
+        </svg>
+        <span class="nav-label">Home</span>
+      </a>
+    </li>
+
     <li class="dropdown">
-      <a class="dropbtn">Chat ▼</a>
+      <a class="dropbtn">
+        <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+        </svg>
+        <span class="nav-label">Chat ▾</span>
+      </a>
       <div class="dropdown-content">
-            <a href="/join">Join a Room</a>
-            <a href="/create">Create a Room</a>
-            <a href="/public">Public Chat</a>
+        <a href="/join">
+          <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><polyline points="10 17 15 12 10 7"/><line x1="15" y1="12" x2="3" y2="12"/>
+          </svg>
+          Join a Room
+        </a>
+        <a href="/create">
+          <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
+          </svg>
+          Create a Room
+        </a>
       </div>
+    {% if google_signed_in %}
+    <li>
+      <a href="/account">
+        <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>
+        </svg>
+        <span class="nav-label">Account</span>
+      </a>
     </li>
-    <li class="dropdown">
-        <a class="dropbtn">Games ▼</a>
-        <div class="dropdown-content">
-            <a href="https://venge.io">Venge.io</a>
-            <a href="https://deadshot.io">Deadshot.io</a>
-            <a href="https://www.crazygames.com">Crazygames</a>
-            <a href="https://poki.com">Poki</a>
-        </div>
+    {% endif %}
+    <li class="li-right">
+      {% if google_signed_in %}
+      <button class="nav-bell" id="friend-req-bell" title="Friend requests" type="button">
+        <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><line x1="19" y1="8" x2="19" y2="14"/><line x1="22" y1="11" x2="16" y2="11"/>
+        </svg>
+        {% if pending_requests %}<span class="nav-bell-badge" id="friend-req-badge">{{ pending_requests | length }}</span>{% endif %}
+      </button>
+      {% endif %}
     </li>
-    <li class="li-right"><a href="#about">Help</a></li>
+    <li class="nav-pill-slot">
+      {% set pill_class = "google-pill--nav" %}
+      {% include "_google_pill.html" %}
+    </li>
+    <li>
+      <a href="#about">
+        <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>
+        </svg>
+        <span class="nav-label">Help</span>
+      </a>
+    </li>
   </ul>
-  {% block main %}{% endblock %}
+
+  {% if google_signed_in %}
+  <div class="fr-dialog-backdrop" id="fr-dialog-backdrop">
+    <div class="fr-dialog" role="dialog" aria-label="Friend requests">
+      <div class="fr-dialog-head">
+        <span>Friend Requests</span>
+        <button class="fr-dialog-close" id="fr-dialog-close" type="button" aria-label="Close">&times;</button>
+      </div>
+      <div class="fr-dialog-body" id="fr-dialog-body">
+        {% if pending_requests %}
+          {% for req in pending_requests %}
+          <div class="fr-item" data-request-id="{{ req.id }}">
+            <div class="home-item-icon">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><line x1="19" y1="8" x2="19" y2="14"/><line x1="22" y1="11" x2="16" y2="11"/></svg>
+            </div>
+            <div class="home-item-body" style="flex:1;">
+              <div class="home-item-title">{{ req.sender_email or "Unknown" }}</div>
+              <div class="home-item-sub">wants to be your friend</div>
+            </div>
+            <div class="fr-actions">
+              <button class="fr-btn fr-accept" type="button">Accept</button>
+              <button class="fr-btn fr-decline" type="button">Decline</button>
+            </div>
+          </div>
+          {% endfor %}
+        {% else %}
+        <p class="home-empty" id="fr-empty-msg">No pending friend requests.</p>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+  {% endif %}
+
+  {% block main %}
+  {% if google_signed_in %}
+  <div class="home-windows">
+    <div class="home-window" id="notif-window">
+      <div class="home-window-head">
+        <div class="home-window-title">
+          <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/>
+          </svg>
+          <span>Notifications</span>
+          {% set unread = home_notifications | selectattr("read", "equalto", false) | list | length %}
+          {% if unread > 0 %}<span class="home-badge" id="notif-badge">{{ unread }}</span>{% endif %}
+        </div>
+        {% if home_notifications %}
+        <button class="home-window-action" id="mark-read-btn">Mark all read</button>
+        {% endif %}
+      </div>
+      <div class="home-window-body">
+        {% if home_notifications %}
+          {% for n in home_notifications %}
+          <div class="home-item {{ '' if n.read else 'unread' }}">
+            <div class="home-item-icon">
+              {% if n.kind == "friend_added" %}
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><line x1="19" y1="8" x2="19" y2="14"/><line x1="22" y1="11" x2="16" y2="11"/></svg>
+              {% else %}
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+              {% endif %}
+            </div>
+            <div class="home-item-body">
+              <div class="home-item-title">{{ n.title }}</div>
+              {% if n.body %}<div class="home-item-sub">{{ n.body }}</div>{% endif %}
+            </div>
+          </div>
+          {% endfor %}
+        {% else %}
+        <p class="home-empty">No notifications yet.</p>
+        {% endif %}
+      </div>
+    </div>
+
+    <div class="home-window" id="friends-window">
+      <div class="home-window-head">
+        <div class="home-window-title">
+          <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>
+          </svg>
+          <span>Friends</span>
+        </div>
+        <a href="/account" class="home-window-action">Manage</a>
+      </div>
+      <div class="home-window-body">
+        {% if home_friends %}
+          {% for f in home_friends %}
+          <div class="home-item">
+            <div class="home-item-icon friend-avatar">{{ (f.friend_email or "?")[0] | upper }}</div>
+            <div class="home-item-body">
+              <div class="home-item-title">{{ f.friend_email or f.friend_google_id }}</div>
+              <div class="home-item-sub">Linked</div>
+            </div>
+          </div>
+          {% endfor %}
+        {% else %}
+        <p class="home-empty">No friends added yet. <a href="/account">Add one →</a></p>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+  {% endif %}
+  {% endblock %}
+
+  <script>
+    (function() {
+      const btn = document.getElementById("mark-read-btn");
+      if (!btn) return;
+      btn.addEventListener("click", async () => {
+        btn.disabled = true;
+        try {
+          await fetch("/api/notifications/mark-read", {
+            method: "POST",
+            headers: { "X-CSRF-Token": "{{ csrf_token() }}" }
+          });
+          document.querySelectorAll("#notif-window .home-item.unread").forEach(el => el.classList.remove("unread"));
+          const badge = document.getElementById("notif-badge");
+          if (badge) badge.remove();
+        } catch (e) { /* no-op */ }
+        btn.disabled = false;
+      });
+    })();
+
+    (function() {
+      const bell = document.getElementById("friend-req-bell");
+      const backdrop = document.getElementById("fr-dialog-backdrop");
+      const closeBtn = document.getElementById("fr-dialog-close");
+      if (!bell || !backdrop) return;
+
+      bell.addEventListener("click", () => backdrop.classList.add("open"));
+      closeBtn.addEventListener("click", () => backdrop.classList.remove("open"));
+      backdrop.addEventListener("click", (e) => {
+        if (e.target === backdrop) backdrop.classList.remove("open");
+      });
+
+      function checkEmpty() {
+        const body = document.getElementById("fr-dialog-body");
+        if (body && !body.querySelector(".fr-item")) {
+          body.innerHTML = '<p class="home-empty">No pending friend requests.</p>';
+        }
+        const remaining = document.querySelectorAll(".fr-item").length;
+        const badge = document.getElementById("friend-req-badge");
+        if (badge) {
+          if (remaining > 0) badge.textContent = remaining;
+          else badge.remove();
+        }
+      }
+
+      document.querySelectorAll(".fr-item").forEach((item) => {
+        const id = item.dataset.requestId;
+        item.querySelector(".fr-accept").addEventListener("click", async (e) => {
+          const b = e.target; b.disabled = true;
+          try {
+            const res = await fetch(`/api/friend-requests/${id}/accept`, {
+              method: "POST",
+              headers: { "X-CSRF-Token": "{{ csrf_token() }}" }
+            });
+            if (res.ok) { item.remove(); checkEmpty(); }
+            else b.disabled = false;
+          } catch (err) { b.disabled = false; }
+        });
+        item.querySelector(".fr-decline").addEventListener("click", async (e) => {
+          const b = e.target; b.disabled = true;
+          try {
+            const res = await fetch(`/api/friend-requests/${id}/decline`, {
+              method: "POST",
+              headers: { "X-CSRF-Token": "{{ csrf_token() }}" }
+            });
+            if (res.ok) { item.remove(); checkEmpty(); }
+            else b.disabled = false;
+          } catch (err) { b.disabled = false; }
+        });
+      });
+    })();
+  </script>
 
 </body>
 </html>
-

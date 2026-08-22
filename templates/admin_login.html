@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Private.chat — Admin</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}"/>
+  <script>
+    (function(){
+      const saved=localStorage.getItem("theme");
+      const sys=window.matchMedia("(prefers-color-scheme: dark)").matches;
+      document.documentElement.setAttribute("data-theme", saved||(sys?"dark":"light"));
+    })();
+    window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change",(e)=>{
+      if(!localStorage.getItem("theme")) document.documentElement.setAttribute("data-theme",e.matches?"dark":"light");
+    });
+    setTimeout(()=>{
+      document.querySelectorAll(".flash-msg").forEach(m=>{m.classList.add("hide");setTimeout(()=>m.remove(),800);});
+    },3000);
+  </script>
+</head>
+<body>
+  {% with messages = get_flashed_messages(with_categories=true) %}
+  {% if messages %}{% for category, message in messages %}
+  <div class="flash-msg flash-{{ category }}">{{ message }}</div>
+  {% endfor %}{% endif %}{% endwith %}
+
+  <div class="container">
+    <h2>Admin Login</h2>
+    <form method="POST">
+      <input type="password" name="password" placeholder="Admin password" autocomplete="off" required>
+      {% if totp_required %}
+      <input type="text" name="totp" placeholder="6-digit code" autocomplete="off" required pattern="\d{6}">
+      {% endif %}
+      <button type="submit">Log in</button>
+    </form>
+  </div>
+</body>
+</html>

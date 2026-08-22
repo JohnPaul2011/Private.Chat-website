@@ -1,0 +1,452 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Private.chat — Dashboard</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}"/>
+  <script src="{{ url_for('static', filename='socket.io.min.js')}}"></script>
+  <script>
+    (function(){
+      const saved=localStorage.getItem("theme");
+      const sys=window.matchMedia("(prefers-color-scheme: dark)").matches;
+      document.documentElement.setAttribute("data-theme", saved||(sys?"dark":"light"));
+    })();
+    setTimeout(()=>{
+      document.querySelectorAll(".flash-msg").forEach(m=>{m.classList.add("hide");setTimeout(()=>m.remove(),800);});
+    },3000);
+  </script>
+  <style>
+    :root {
+      --ops-bg:        #0b0f14;
+      --ops-panel:     #121a22;
+      --ops-panel-2:   #182029;
+      --ops-border:    rgba(255,255,255,.08);
+      --ops-text:      #e6edf3;
+      --ops-muted:     #7d8590;
+      --ops-accent:    #2dd4bf;
+      --ops-accent-dim:#1a4a45;
+      --ops-warn:      #f0b429;
+      --ops-danger:    #f85149;
+      --ops-danger-dim:#3d1516;
+      --ops-mono:      'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+    }
+    * { box-sizing: border-box; }
+    body {
+      background: var(--ops-bg);
+      color: var(--ops-text);
+      font-family: var(--font-main, 'Segoe UI', sans-serif);
+      margin: 0;
+      min-height: 100vh;
+    }
+    .dash-shell { max-width: 980px; margin: 0 auto; padding: 24px 20px 60px; }
+
+    /* header */
+    .dash-header {
+      display: flex; align-items: center; justify-content: space-between;
+      padding-bottom: 18px; margin-bottom: 22px; border-bottom: 1px solid var(--ops-border);
+    }
+    .dash-title { display: flex; align-items: baseline; gap: 10px; }
+    .dash-title h1 { font-size: 19px; font-weight: 700; margin: 0; letter-spacing: .2px; }
+    .dash-title .tag {
+      font-family: var(--ops-mono); font-size: 10.5px; color: var(--ops-accent);
+      background: var(--ops-accent-dim); padding: 2px 7px; border-radius: 4px; letter-spacing: .5px;
+    }
+    .dash-status { display: flex; align-items: center; gap: 14px; font-size: 13px; color: var(--ops-muted); }
+    .pulse-dot {
+      position: relative; width: 8px; height: 8px; border-radius: 50%;
+      background: var(--ops-accent); display: inline-block;
+    }
+    .pulse-dot::after {
+      content: ""; position: absolute; inset: -4px; border-radius: 50%;
+      border: 1px solid var(--ops-accent); opacity: .6;
+      animation: pulse-ring 2s ease-out infinite;
+    }
+    .pulse-dot.off { background: #4a4a4a; }
+    .pulse-dot.off::after { display: none; }
+    @keyframes pulse-ring { 0%{transform:scale(.6);opacity:.7} 100%{transform:scale(1.9);opacity:0} }
+    .dash-status a { color: var(--ops-muted); text-decoration: none; border-bottom: 1px dotted var(--ops-muted); }
+    .dash-status a:hover { color: var(--ops-text); }
+
+    /* stat strip */
+    .stat-strip {
+      display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 26px;
+    }
+    .stat-card {
+      background: var(--ops-panel); border: 1px solid var(--ops-border); border-radius: 10px;
+      padding: 14px 16px;
+    }
+    .stat-card .num {
+      font-family: var(--ops-mono); font-size: 24px; font-weight: 600; line-height: 1;
+      color: var(--ops-text);
+    }
+    .stat-card .num.accent { color: var(--ops-accent); }
+    .stat-card .num.warn { color: var(--ops-warn); }
+    .stat-card .lbl { font-size: 11px; color: var(--ops-muted); margin-top: 6px; letter-spacing: .3px; text-transform: uppercase; }
+
+    /* section headers */
+    .section-eyebrow {
+      font-family: var(--ops-mono); font-size: 11px; color: var(--ops-muted);
+      text-transform: uppercase; letter-spacing: 1px; margin: 0 0 10px 2px;
+    }
+
+    /* announcement */
+    .announce-box {
+      background: linear-gradient(155deg, var(--ops-panel-2), var(--ops-panel));
+      border: 1px solid var(--ops-border); border-radius: 12px; padding: 18px 20px; margin-bottom: 28px;
+      position: relative; overflow: hidden;
+    }
+    .announce-box::before {
+      content: ""; position: absolute; top: -30%; right: -10%; width: 220px; height: 220px;
+      background: radial-gradient(circle, var(--ops-accent-dim) 0%, transparent 70%);
+      pointer-events: none;
+    }
+    .announce-head { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
+    .announce-head svg { color: var(--ops-accent); flex-shrink: 0; }
+    .announce-head strong { font-size: 14.5px; }
+    .announce-box select {
+      width: 100%; background: var(--ops-panel); color: var(--ops-text); border: 1px solid var(--ops-border);
+      border-radius: 7px; padding: 8px 10px; font-size: 13px; margin-bottom: 10px;
+    }
+    .announce-box textarea {
+      width: 100%; min-height: 72px; box-sizing: border-box; background: var(--ops-panel);
+      color: var(--ops-text); border: 1px solid var(--ops-border); border-radius: 7px;
+      padding: 10px 12px; font-size: 13.5px; font-family: inherit; resize: vertical;
+    }
+    .announce-box textarea:focus, .announce-box select:focus { outline: 1px solid var(--ops-accent); border-color: var(--ops-accent); }
+    .announce-footer { display: flex; align-items: center; justify-content: space-between; margin-top: 10px; }
+    .announce-hint { font-size: 11px; color: var(--ops-muted); }
+    .announce-box button[type="submit"] {
+      background: var(--ops-accent); color: #06201c; border: none; border-radius: 7px;
+      padding: 8px 18px; font-weight: 600; font-size: 13px; cursor: pointer; transition: filter .15s;
+    }
+    .announce-box button[type="submit"]:hover { filter: brightness(1.1); }
+
+    /* rooms */
+    #roomsContainer { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 14px; }
+    #noRooms { color: var(--ops-muted); font-size: 13.5px; grid-column: 1/-1; }
+    .room-card {
+      background: var(--ops-panel); border: 1px solid var(--ops-border); border-radius: 12px; padding: 16px;
+    }
+    .room-card h3 {
+      margin: 0 0 10px 0; font-size: 14.5px; display: flex; align-items: center; justify-content: space-between;
+    }
+    .room-card h3 .room-code { font-family: var(--ops-mono); }
+    .room-card h3 .msg-count { font-family: var(--ops-mono); font-size: 11px; color: var(--ops-muted); font-weight: 400; }
+    .member-row {
+      display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 5px 0;
+      font-size: 13px; padding: 4px 0;
+    }
+    .member-row span { color: var(--ops-text); }
+    .room-card .btn-row { margin-top: 10px; display: flex; flex-wrap: wrap; gap: 6px; }
+    .kick-btn, .danger-btn {
+      background: var(--ops-danger-dim); color: var(--ops-danger); border: 1px solid rgba(248,81,73,.25);
+      border-radius: 6px; padding: 4px 9px; cursor: pointer; font-size: 12px; transition: background .15s;
+    }
+    .kick-btn:hover, .danger-btn:hover { background: rgba(248,81,73,.22); }
+
+    .capture-section { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--ops-border); }
+    .capture-section summary {
+      cursor: pointer; font-size: 12.5px; color: var(--ops-muted); margin-bottom: 8px;
+      list-style: none; display: flex; align-items: center; gap: 5px;
+    }
+    .capture-section summary::-webkit-details-marker { display: none; }
+    .capture-section summary::before { content: "▸"; font-size: 10px; }
+    .capture-section[open] summary::before { content: "▾"; }
+    .capture-btn {
+      background: var(--ops-panel-2); color: var(--ops-text); border: 1px solid var(--ops-border);
+      border-radius: 6px; padding: 5px 10px; cursor: pointer; font-size: 12px; margin: 0 6px 6px 0;
+      transition: background .15s;
+    }
+    .capture-btn:hover { background: #212b35; }
+    .capture-btn.capturing { background: rgba(240,180,41,.15); color: var(--ops-warn); border-color: rgba(240,180,41,.35); }
+    .capture-btn.capturing:hover { background: rgba(240,180,41,.25); }
+    .blob-view {
+      background: #05080b; color: #5fd99a; font-family: var(--ops-mono); font-size: 11px; padding: 10px;
+      border-radius: 6px; max-height: 220px; overflow: auto; white-space: pre-wrap; word-break: break-all;
+      margin-top: 8px; border: 1px solid var(--ops-border);
+    }
+    .capture-note { font-size: 11px; color: var(--ops-muted); margin-bottom: 6px; }
+
+    @media (max-width: 640px) {
+      .stat-strip { grid-template-columns: repeat(2, 1fr); }
+      #roomsContainer { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  {% with messages = get_flashed_messages(with_categories=true) %}
+  {% if messages %}{% for category, message in messages %}
+  <div class="flash-msg flash-{{ category }}">{{ message }}</div>
+  {% endfor %}{% endif %}{% endwith %}
+
+  <div class="dash-shell">
+
+    <div class="dash-header">
+      <div class="dash-title">
+        <h1>Dashboard</h1>
+        <span class="tag">OPS</span>
+      </div>
+      <div class="dash-status">
+        <span><span class="pulse-dot" id="live-dot"></span> <span id="live-label">Live</span></span>
+        <a href="{{ url_for('admin_logout') }}">Log out</a>
+      </div>
+    </div>
+
+    <div class="section-eyebrow">Overview</div>
+    <div class="stat-strip">
+      <div class="stat-card"><div class="num accent" id="stat-rooms">0</div><div class="lbl">Active rooms</div></div>
+      <div class="stat-card"><div class="num" id="stat-members">0</div><div class="lbl">Members online</div></div>
+      <div class="stat-card"><div class="num" id="stat-messages">0</div><div class="lbl">Messages stored</div></div>
+      <div class="stat-card"><div class="num warn" id="stat-capturing">0</div><div class="lbl">Rooms capturing</div></div>
+    </div>
+
+    <div class="section-eyebrow">Broadcast</div>
+    <div class="announce-box">
+      <div class="announce-head">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M3 11l18-5v12L3 14v-3z"/><path d="M11.6 16.8a3 3 0 1 1-5.2-3"/>
+        </svg>
+        <strong>Send announcement</strong>
+      </div>
+      <form id="announceForm">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <select name="target" id="announceTarget">
+          <option value="all">All rooms</option>
+        </select>
+        <textarea name="announcement" placeholder="Message every member will see, appears as a system message…" required maxlength="2000"></textarea>
+        <div class="announce-footer">
+          <span class="announce-hint">Sent as a system message to the selected room(s)</span>
+          <button type="submit">Send</button>
+        </div>
+      </form>
+    </div>
+
+    <div class="section-eyebrow">Push Notifications</div>
+    <div class="announce-box">
+      <div class="announce-head">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/>
+        </svg>
+        <strong>Send push notification</strong>
+      </div>
+      <form id="pushForm">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <input type="text" name="push_title" placeholder="Title (optional)" maxlength="80"
+               style="width:100%;padding:9px 10px;border-radius:6px;border:1px solid var(--ops-border);background:var(--ops-panel);color:var(--ops-text);font-family:inherit;font-size:13px;margin-bottom:8px;">
+        <textarea name="push_body" placeholder="Notification text, delivered directly to devices — bypasses chat and works even if the app is closed…" required maxlength="500"></textarea>
+        <div class="announce-footer">
+          <span class="announce-hint">Sent to every device with push enabled, regardless of room</span>
+          <button type="submit">Send Push</button>
+        </div>
+      </form>
+    </div>
+
+    <div class="section-eyebrow">Rooms</div>
+    <div id="roomsContainer">
+      <p id="noRooms">No active rooms.</p>
+    </div>
+  </div>
+
+  <script id="initial-rooms" type="application/json">{{ rooms | tojson }}</script>
+
+  <script>
+  const CSRF = document.querySelector('input[name="csrf_token"]').value;
+
+  function esc(s) {
+    const d = document.createElement("div");
+    d.innerText = s == null ? "" : String(s);
+    return d.innerHTML;
+  }
+
+  function updateStats(rooms) {
+    const codes = Object.keys(rooms);
+    let totalMembers = 0, totalMessages = 0, capturingCount = 0;
+    codes.forEach(c => {
+      totalMembers += rooms[c].members.length;
+      totalMessages += rooms[c].message_count || 0;
+      if (rooms[c].capturing) capturingCount++;
+    });
+    document.getElementById("stat-rooms").textContent = codes.length;
+    document.getElementById("stat-members").textContent = totalMembers;
+    document.getElementById("stat-messages").textContent = totalMessages;
+    document.getElementById("stat-capturing").textContent = capturingCount;
+  }
+
+  function renderRooms(rooms) {
+    updateStats(rooms);
+    const container = document.getElementById("roomsContainer");
+    const codes = Object.keys(rooms);
+
+    // remember which rooms have their capture panel open (and what's shown in the blob view)
+    // so a live update doesn't collapse it out from under the admin mid-review.
+    const openState = {};
+    container.querySelectorAll("details.capture-section").forEach(d => {
+      const code = d.dataset.code;
+      if (!code) return;
+      const blobBox = d.querySelector(".blob-view");
+      openState[code] = {
+        open: d.open,
+        blobVisible: blobBox && blobBox.style.display !== "none",
+        blobText: blobBox ? blobBox.textContent : ""
+      };
+    });
+
+    if (codes.length === 0) {
+      container.innerHTML = '<p id="noRooms">No active rooms.</p>';
+    } else {
+      container.innerHTML = codes.map(code => {
+        const r = rooms[code];
+        const isEmpty = !!r.empty;
+        const memberRows = r.members.map(member => `
+          <div class="member-row">
+            <span>${esc(member)}</span>
+            <button class="kick-btn" data-action="kick" data-code="${esc(code)}" data-user="${esc(member)}">Kick</button>
+          </div>`).join("");
+        const capturing = !!r.capturing;
+        const captureLabel = capturing ? "⏺ Stop Capturing" : "Start Capturing";
+        const sourceNote = r.save_history
+          ? `History saved (${r.message_count} msgs) ${capturing ? `+ live capture (${r.captured_count})` : ""}`
+          : `History off ${capturing ? `— live capture only (${r.captured_count})` : "— nothing retained unless capturing"}`;
+        const st = openState[code];
+        const emptyBadge = isEmpty
+          ? `<span style="font-family:var(--ops-mono);font-size:10px;color:var(--ops-warn);
+               background:rgba(240,180,41,.12);border:1px solid rgba(240,180,41,.3);
+               padding:2px 6px;border-radius:4px;margin-left:8px;">EMPTY · AWAITING CLEANUP</span>`
+          : "";
+        return `
+          <div class="room-card">
+            <h3><span class="room-code">Room ${esc(code)}${emptyBadge}</span><span class="msg-count">${r.message_count} msgs</span></h3>
+            ${memberRows || '<div class="member-row" style="color:var(--ops-muted)">No members</div>'}
+            <div class="btn-row">
+              <button class="danger-btn" data-action="kickall" data-code="${esc(code)}">Kick All</button>
+              <button class="danger-btn" data-action="clear" data-code="${esc(code)}">Clear Messages</button>
+            </div>
+            <details class="capture-section" data-code="${esc(code)}" ${st && st.open ? "open" : ""}>
+              <summary>Encrypted Messages</summary>
+              <div class="capture-note">${esc(sourceNote)}</div>
+              <button class="capture-btn ${capturing ? "capturing" : ""}"
+                      data-action="${capturing ? "capture-stop" : "capture-start"}" data-code="${esc(code)}">
+                ${captureLabel}
+              </button>
+              <button class="capture-btn" data-action="view-blobs" data-code="${esc(code)}">View Blobs</button>
+              <button class="capture-btn" data-action="save-blobs" data-code="${esc(code)}">Save Blobs</button>
+              <div class="blob-view" id="blob-view-${esc(code)}"
+                   style="display:${st && st.blobVisible ? "block" : "none"};">${st ? esc(st.blobText) : ""}</div>
+            </details>
+          </div>`;
+      }).join("");
+    }
+
+    // keep the announcement target select in sync with live rooms
+    const select = document.getElementById("announceTarget");
+    const prevValue = select.value;
+    select.innerHTML = '<option value="all">All rooms</option>' +
+      codes.map(c => `<option value="${esc(c)}">Room ${esc(c)}</option>`).join("");
+    if (codes.includes(prevValue) || prevValue === "all") select.value = prevValue;
+  }
+
+  async function adminAction(action, code, user) {
+    if (action === "view-blobs") { await viewBlobs(code); return; }
+    if (action === "save-blobs") { await saveBlobs(code); return; }
+    let url;
+    if (action === "kick") url = `/admin/kick/${encodeURIComponent(code)}/${encodeURIComponent(user)}`;
+    else if (action === "kickall") url = `/admin/kickall/${encodeURIComponent(code)}`;
+    else if (action === "clear") url = `/admin/clear/${encodeURIComponent(code)}`;
+    else if (action === "capture-start") url = `/admin/capture/start/${encodeURIComponent(code)}`;
+    else if (action === "capture-stop") url = `/admin/capture/stop/${encodeURIComponent(code)}`;
+    else return;
+    await fetch(url, {
+      method: "POST",
+      headers: { "X-CSRF-Token": CSRF, "Content-Type": "application/x-www-form-urlencoded" },
+      body: "csrf_token=" + encodeURIComponent(CSRF)
+    });
+    // live update arrives via socket; no manual re-render needed
+  }
+
+  async function fetchBlobs(code) {
+    const res = await fetch(`/admin/blobs/${encodeURIComponent(code)}`);
+    return res.json();
+  }
+
+  async function viewBlobs(code) {
+    const box = document.getElementById(`blob-view-${code}`);
+    if (!box) return;
+    if (box.style.display !== "none") { box.style.display = "none"; return; }
+    box.style.display = "block";
+    box.textContent = "Loading…";
+    try {
+      const data = await fetchBlobs(code);
+      box.textContent = JSON.stringify(data, null, 2);
+    } catch (e) {
+      box.textContent = "Failed to load.";
+    }
+  }
+
+  async function saveBlobs(code) {
+    try {
+      const data = await fetchBlobs(code);
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `room-${code}-encrypted-blobs.json`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (e) { /* no-op */ }
+  }
+
+  document.getElementById("roomsContainer").addEventListener("click", (e) => {
+    const btn = e.target.closest("button[data-action]");
+    if (!btn) return;
+    adminAction(btn.dataset.action, btn.dataset.code, btn.dataset.user);
+  });
+
+  document.getElementById("announceForm").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const form = e.target;
+    const body = new URLSearchParams(new FormData(form)).toString();
+    await fetch("/admin/announce", {
+      method: "POST",
+      headers: { "X-CSRF-Token": CSRF, "Content-Type": "application/x-www-form-urlencoded" },
+      body
+    });
+    form.querySelector("textarea").value = "";
+  });
+
+  document.getElementById("pushForm").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const form = e.target;
+    const body = new URLSearchParams(new FormData(form)).toString();
+    const btn = form.querySelector("button[type=submit]");
+    const originalLabel = btn.textContent;
+    btn.disabled = true; btn.textContent = "Sending…";
+    try {
+      const res = await fetch("/admin/push-broadcast", {
+        method: "POST",
+        headers: { "X-CSRF-Token": CSRF, "Content-Type": "application/x-www-form-urlencoded" },
+        body
+      });
+      btn.textContent = res.ok ? "Sent ✓" : "Failed";
+    } catch (err) {
+      btn.textContent = "Failed";
+    }
+    form.querySelector("textarea").value = "";
+    form.querySelector("input[name=push_title]").value = "";
+    setTimeout(() => { btn.disabled = false; btn.textContent = originalLabel; }, 1800);
+  });
+
+  // ── initial render + live updates ──────────────────────────────────────
+  renderRooms(JSON.parse(document.getElementById("initial-rooms").textContent));
+
+  const socketio = io({ transports: ["polling"] });
+  const dot = document.getElementById("live-dot");
+  const liveLabel = document.getElementById("live-label");
+  socketio.on("connect", () => { dot.classList.remove("off"); liveLabel.textContent = "Live"; });
+  socketio.on("disconnect", () => { dot.classList.add("off"); liveLabel.textContent = "Disconnected"; });
+  socketio.on("admin_rooms_update", (rooms) => renderRooms(rooms));
+  </script>
+</body>
+</html>

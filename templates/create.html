@@ -1,37 +1,70 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="light">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Private.chat</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='style.css')}}">
-    <script>
-        setTimeout(() => {
-          document.querySelectorAll(".flash-msg").forEach(msg => {
-            msg.classList.add("hide");
-            setTimeout(() => msg.remove(), 800);
-          });
-        }, 3000);
-      </script>      
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Private.chat — Create</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}"/>
+  <script>
+    (function(){
+      const saved=localStorage.getItem("theme");
+      const sys=window.matchMedia("(prefers-color-scheme: dark)").matches;
+      document.documentElement.setAttribute("data-theme", saved||(sys?"dark":"light"));
+    })();
+    window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change",(e)=>{
+      if(!localStorage.getItem("theme")) document.documentElement.setAttribute("data-theme",e.matches?"dark":"light");
+    });
+    setTimeout(()=>{
+      document.querySelectorAll(".flash-msg").forEach(m=>{m.classList.add("hide");setTimeout(()=>m.remove(),800);});
+    },3000);
+  </script>
 </head>
 <body>
-    
-    {% with messages = get_flashed_messages(with_categories=true) %}
-    {% if messages %}
-        {% for category, message in messages %}
-        <div class="flash-msg flash-{{ category }}">{{ message }}</div>
-        {% endfor %}
-    {% endif %}
-    {% endwith %}
+  {% with messages = get_flashed_messages(with_categories=true) %}
+  {% if messages %}{% for category, message in messages %}
+  <div class="flash-msg flash-{{ category }}">{{ message }}</div>
+  {% endfor %}{% endif %}{% endwith %}
 
-    <div class="container">
-        <h2>Creating a room... </h2>
-        <form method="POST">
-          <input name="name" placeholder="Username" value="{{username}}" required autocomplete="off">
-          <input name="code" placeholder="Room ID" value="{{code}}" autocomplete="off">
-          <input name="password" placeholder="Room password"  autocomplete="off">
-          <button name="create" type="submit">Create</button>
-        </form>
+  <div class="container">
+    <h2>Create a Room</h2>
+
+    <form method="POST" id="createForm">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input name="name" placeholder="Username" value="{{ username }}" required autocomplete="off">
+      <input name="code" placeholder="Room ID (leave blank to auto-generate)" value="{{ code }}" autocomplete="off">
+      <input type="text" placeholder="Room password (optional)" id="pwField" autocomplete="off">
+      <input type="hidden" name="password" id="pwHash">
+      <label class="toggle-row">
+        <div class="toggle-info">
+          <span class="toggle-title">Save chat history</span>
+          <span class="toggle-desc">New members can read previous messages</span>
+        </div>
+        <div class="toggle-switch">
+          <input type="checkbox" name="save_history" id="save_history" value="1">
+          <span class="toggle-slider"></span>
+        </div>
+      </label>
+      <button type="submit">Create</button>
+    </form>
+
+    <div class="google-pill-block">
+      {% include "_google_pill.html" %}
     </div>
+
+    <p><a href="/join">Join an existing room →</a></p>
+  </div>
+  <script>
+  document.getElementById("createForm").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const form = e.target;
+    const pw = document.getElementById("pwField").value;
+    sessionStorage.setItem("pending_secret", pw);
+    const enc = new TextEncoder().encode(pw);
+    const hash = await crypto.subtle.digest("SHA-256", enc);
+    const hex = Array.from(new Uint8Array(hash)).map(b=>b.toString(16).padStart(2,"0")).join("");
+    document.getElementById("pwHash").value = hex;
+    form.submit();
+  });
+  </script>
 </body>
 </html>

@@ -1,173 +1,673 @@
 {% extends "index.html" %}
 {% block main %}
 
-<head>
-<script src="{{ url_for('static', filename='/js/socket.io.js') }}"></script>
+<div class="room-wrapper">
 
-<style>
-#adminMembers {
-    padding: 8px;
-    margin: 10px 0;
-    border-radius: 6px;
-    background: #222;
-    color: #fff;
-    font-size: 14px;
-    white-space: pre-wrap;
-}
+  <!-- ── Chat header ── -->
+  <div class="navbar-msg">
+    <div class="navbar-left">
+      <div class="room-name">{{ code }}</div>
+      <button id="members-btn" class="members-count-btn" title="View members">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" width="13" height="13">
+          <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/>
+          <path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>
+        </svg>
+        <span id="members-count">0</span>
+      </button>
+    </div>
+    <div class="navbar-actions">
+      <button id="mute-btn" title="Mute notifications">
+        <svg id="mute-icon-on" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/>
+          <path d="M19.07 4.93a10 10 0 0 1 0 14.14"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/>
+        </svg>
+        <svg id="mute-icon-off" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:none">
+          <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/>
+          <line x1="23" y1="9" x2="17" y2="15"/><line x1="17" y1="9" x2="23" y2="15"/>
+        </svg>
+      </button>
+      <button id="fullscreen-btn" title="Fullscreen">
+        <svg id="fs-expand" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/>
+          <line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/>
+        </svg>
+        <svg id="fs-compress" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:none">
+          <polyline points="4 14 10 14 10 20"/><polyline points="20 10 14 10 14 4"/>
+          <line x1="10" y1="14" x2="3" y2="21"/><line x1="21" y1="3" x2="14" y2="10"/>
+        </svg>
+      </button>
+      <button id="leave-btn" title="Leave room">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M3 5v14"/><path d="M21 12H7"/><path d="m15 18 6-6-6-6"/>
+        </svg>
+      </button>
+    </div>
+  </div>
 
-#kickControls {
-    padding: 8px;
-    margin: 10px 0;
-    border-radius: 6px;
-    background: #f0f0f0;
-}
+  <!-- ── Members panel ── -->
+  <div id="members-panel" class="members-panel hidden">
+    <div class="members-panel-header">Online Members</div>
+    <div id="members-list" class="members-list"></div>
+  </div>
 
-#kickControls button {
-    margin: 2px;
-    padding: 4px 8px;
-    background: #ff4d4d;
-    color: white;
-    border: none;
-    border-radius: 4px;
-    cursor: pointer;
-}
+  <!-- ── Messages ── -->
+  <div class="e2ee-banner">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="14" height="14">
+      <rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/>
+    </svg>
+    <span>Messages and voice clips are end-to-end encrypted. Only people in this chat can read or listen to them. Not even the server can.</span>
+  </div>
+  <div class="messages" id="messages"></div>
 
-#kickControls button:hover {
-    background: #cc0000;
-}
-</style>
+  <!-- ── Reply bar ── -->
+  <div id="reply-bar" class="reply-bar hidden">
+    <div class="reply-bar-stripe"></div>
+    <div class="reply-bar-body">
+      <span class="reply-bar-name" id="reply-bar-name"></span>
+      <span class="reply-bar-text" id="reply-bar-text"></span>
+    </div>
+    <button id="reply-cancel-btn" class="reply-cancel-btn">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" width="16" height="16">
+        <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+      </svg>
+    </button>
+  </div>
 
-<script>
-const USERNAME = "{{ username }}";
-const IS_ADMIN = {{ 'true' if is_admin else 'false' | tojson }};
-// fullscreen (mobile only)
-function isMobile() {
-    return /Android|iPhone|iPad|iPod|Windows Phone/i.test(navigator.userAgent);
-}
-function goFull() {
-    if (!isMobile()) return;
-    let e = document.documentElement;
-    if (!document.fullscreenElement) e.requestFullscreen?.();
-}
-if (isMobile()) {
-    document.addEventListener("click", goFull);
-    document.addEventListener("touchstart", goFull);
-}
-</script>
+  <!-- ── Typing indicator ── -->
+  <div id="typing-indicator" class="typing-indicator hidden" style="font-size:12px;opacity:.65;padding:2px 16px;min-height:16px;"></div>
+
+  <!-- ── Input bar ── -->
+  <div class="inputs">
+    <input id="message" type="text" placeholder="Type a message…" autocomplete="off">
+    <button id="mic-btn" class="input-icon-btn" title="Record voice message">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="20" height="20">
+        <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
+        <path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/>
+        <line x1="8" y1="23" x2="16" y2="23"/>
+      </svg>
+    </button>
+    <button id="send-btn" title="Send">
+      <svg viewBox="0 0 24 24" fill="white" width="20" height="20">
+        <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/>
+      </svg>
+    </button>
+  </div>
+
+</div>
 
 <audio id="notifySound" src="{{ url_for('static', filename='sounds/notify.mp3') }}"></audio>
-</head>
-
-<!-- admin members list -->
-{% if is_admin %}
-<div id="adminMembers"></div>
-
-<!-- kick controls for admin -->
-<div id="kickControls">
-    <strong>Admin Controls:</strong>
-    <button onclick="kickAll()">Kick All</button>
-    <div id="memberButtons"></div>
-</div>
-{% endif %}
-
-<div class="message-box">
-    <h2>Chat Room: {{ code }}</h2>
-
-    <div class="messages" id="messages"></div>
-
-    <div class="inputs">
-        <input id="message" type="text" placeholder="Message" autocomplete="off">
-        <button id="send-btn" onclick="sendMessage()">Send</button>
-    </div>
-</div>
 
 <script>
-var socketio = io();
+document.addEventListener("DOMContentLoaded", function () {
+
+const USERNAME    = {{ username | tojson }};
+const ROOM_CODE   = {{ code | tojson }};
+let ROOM_SECRET   = sessionStorage.getItem("secret:" + ROOM_CODE);
+if (!ROOM_SECRET) {
+  ROOM_SECRET = sessionStorage.getItem("pending_secret") || "";
+  sessionStorage.setItem("secret:" + ROOM_CODE, ROOM_SECRET);
+}
+sessionStorage.removeItem("pending_secret");
+
+// ── E2E encryption (AES-GCM 256, key derived client-side; server only ever relays ciphertext) ──
+let cryptoKey = null;
+async function deriveKey() {
+  const enc = new TextEncoder();
+  const baseKey = await crypto.subtle.importKey(
+    "raw", enc.encode(ROOM_SECRET !== null && ROOM_SECRET !== "" ? ROOM_SECRET : "no-password-" + ROOM_CODE),
+    "PBKDF2", false, ["deriveKey"]
+  );
+  cryptoKey = await crypto.subtle.deriveKey(
+    { name:"PBKDF2", salt: enc.encode("privatechat-"+ROOM_CODE), iterations:150000, hash:"SHA-256" },
+    baseKey, { name:"AES-GCM", length:256 }, false, ["encrypt","decrypt"]
+  );
+}
+const keyReady = deriveKey();
+function bufToB64(buf){ return btoa(String.fromCharCode(...new Uint8Array(buf))); }
+function b64ToBuf(b64){ return Uint8Array.from(atob(b64), c=>c.charCodeAt(0)); }
+async function encryptText(plaintext) {
+  await keyReady;
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const ct = await crypto.subtle.encrypt({name:"AES-GCM", iv}, cryptoKey, new TextEncoder().encode(plaintext));
+  return bufToB64(iv) + ":" + bufToB64(ct);
+}
+async function decryptText(payload) {
+  if (typeof payload !== "string" || !payload.includes(":")) return payload;
+  try {
+    await keyReady;
+    const [ivB64, ctB64] = payload.split(":");
+    const pt = await crypto.subtle.decrypt({name:"AES-GCM", iv:b64ToBuf(ivB64)}, cryptoKey, b64ToBuf(ctB64));
+    return new TextDecoder().decode(pt);
+  } catch (e) { return payload; }
+}
+
+// ── Voice message encryption: plain AES-GCM over raw bytes (no compression —
+// audio is already compressed by the Opus codec, gzip added nothing but an
+// external CDN dependency and a failure point) ──
+async function encryptBytes(bytes) {
+  await keyReady;
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const ct = await crypto.subtle.encrypt({name:"AES-GCM", iv}, cryptoKey, bytes);
+  return bufToB64(iv) + ":" + bufToB64(ct);
+}
+async function decryptBytes(payload) {
+  await keyReady;
+  const [ivB64, ctB64] = payload.split(":");
+  const pt = await crypto.subtle.decrypt({name:"AES-GCM", iv:b64ToBuf(ivB64)}, cryptoKey, b64ToBuf(ctB64));
+  return new Uint8Array(pt);
+}
+// ── end E2E encryption ──
+
 const messagesDiv = document.getElementById("messages");
-const adminBox = document.getElementById("adminMembers");
-const kickControls = document.getElementById("kickControls");
-const memberButtons = document.getElementById("memberButtons");
 
-// LIVE MEMBER LIST
+window.addEventListener("pagehide", () => { socketio.disconnect(); });
+window.addEventListener("beforeunload", () => { socketio.disconnect(); });
+const msgInput    = document.getElementById("message");
+const sendBtn     = document.getElementById("send-btn");
+const leaveBtn    = document.getElementById("leave-btn");
+const status      = document.getElementById("conn-status");  // doesn't exist but safe
+const roomWrapper = document.querySelector(".room-wrapper");
+
+// ── Socket ─────────────────────────────────────────────────────────────
+const socketio = io({ transports: ["polling"] });
+
+socketio.on("connect", () => {
+  if (document.getElementById("conn-status")) {
+    document.getElementById("conn-status").textContent = "online";
+    document.getElementById("conn-status").style.color = "";
+    document.getElementById("conn-status").style.animation = "statusPulse 1.5s ease 3";
+  }
+});
+socketio.on("disconnect", () => {
+  if (document.getElementById("conn-status")) {
+    document.getElementById("conn-status").textContent = "reconnecting…";
+    document.getElementById("conn-status").style.color = "#e53935";
+  }
+});
+
+socketio.on("message", async (data) => {
+  if (data.type === "voice") {
+    await createVoiceMessage(data);
+  } else {
+    const msg = await decryptText(data.message);
+    let replyTo = data.reply_to || null;
+    if (replyTo && replyTo.message) replyTo = {...replyTo, message: await decryptText(replyTo.message)};
+    createMessage(data.name, msg, data.timestamp, replyTo, data.id);
+  }
+  if (data.name !== USERNAME && !isMuted) playSound();
+});
+
+let currentMembers = [];
+const memberLatency = {};   // username -> ms
+
+function renderMembers() {
+  document.getElementById("members-count").textContent = currentMembers.length;
+  const ml = document.getElementById("members-list");
+  const sorted = [...currentMembers].sort((a, b) => {
+    const la = memberLatency[a], lb = memberLatency[b];
+    if (la == null && lb == null) return 0;
+    if (la == null) return 1;
+    if (lb == null) return -1;
+    return la - lb;
+  });
+  ml.innerHTML = sorted.map(m => {
+    const ms = memberLatency[m];
+    const latencyHtml = ms == null ? "" :
+      `<span class="member-latency" style="opacity:.6;font-size:11px;margin-left:auto;">${ms}ms</span>`;
+    return `<div class="members-list-item" style="display:flex;align-items:center;gap:6px;">
+      <span class="member-dot"></span>
+      <span class="member-name${m===USERNAME?" member-you":""}">${esc(m)}${m===USERNAME?" (you)":""}</span>
+      ${latencyHtml}
+    </div>`;
+  }).join("");
+}
+
 socketio.on("member_list", (list) => {
-    adminBox.innerText = "Members:\n" + JSON.stringify(list, null, 2);
-    // update kick buttons
-    memberButtons.innerHTML = "";
-    list.forEach(user => {
-        const btn = document.createElement("button");
-        btn.innerText = `Kick ${user}`;
-        btn.onclick = () => window.location.href = `/kick/{{ code }}/${user}`;
-        memberButtons.appendChild(btn);
-    });
+  currentMembers = list;
+  for (const name of Array.from(typingUsers)) {
+    if (!list.includes(name)) { typingUsers.delete(name); clearTimeout(typingClearTimers[name]); }
+  }
+  renderTyping();
+  renderMembers();
 });
 
-// kick all function
-function kickAll() {
-    window.location.href = `/kickall/{{ code }}`;
-}
+socketio.on("member_latency", (data) => {
+  memberLatency[data.name] = data.ms;
+  renderMembers();
+});
 
-// kick events
-socketio.on("kicked", () => window.location.href = "/");
+// ── Network latency measurement (informational only — display, not priority) ──
+socketio.on("latency_pong", (data) => {
+  const ms = Date.now() - data.t;
+  socketio.emit("report_latency", { ms });
+});
+function pingLatency() {
+  if (socketio.connected) socketio.emit("latency_ping", { t: Date.now() });
+}
+socketio.on("connect", () => { pingLatency(); });
+setInterval(pingLatency, 10000);
+
+// ── Kicked notices ───────────────────────────────────────────────────────
+function showKickedOverlay(text) {
+  const overlay = document.createElement("div");
+  overlay.style.cssText = "position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,.75);"
+    + "display:flex;align-items:center;justify-content:center;text-align:center;padding:24px;";
+  overlay.innerHTML = `<div style="background:var(--panel,#1e1e1e);color:var(--text,#fff);
+    padding:24px 28px;border-radius:12px;max-width:320px;font-size:15px;line-height:1.5;">
+    ${esc(text)}</div>`;
+  document.body.appendChild(overlay);
+  setTimeout(() => { window.location.href = "/"; }, 2500);
+}
 socketio.on("kicked_user", (data) => {
-    if (USERNAME === data.user) window.location.href = "/";
+  if (data.user === USERNAME) {
+    socketio.disconnect();
+    showKickedOverlay("You have been removed from this room by an admin.");
+  }
+});
+socketio.on("kicked", () => {
+  socketio.disconnect();
+  showKickedOverlay("This room has been closed by an admin.");
 });
 
-// create message
-function createMessage(name, msg) {
-    messagesDiv.innerHTML += `
-        <div class="text">
-            <span><strong>${name}</strong>: ${msg}</span>
-            <span class="muted">${new Date().toLocaleString()}</span>
-        </div>
-    `;
+// ── Mute ───────────────────────────────────────────────────────────────
+let isMuted = localStorage.getItem("chat_muted") === "1";
+const muteBtn    = document.getElementById("mute-btn");
+const muteIconOn = document.getElementById("mute-icon-on");
+const muteIconOff= document.getElementById("mute-icon-off");
+function applyMute() {
+  muteIconOn.style.display  = isMuted ? "none"  : "block";
+  muteIconOff.style.display = isMuted ? "block" : "none";
+  muteBtn.title = isMuted ? "Unmute notifications" : "Mute notifications";
+  muteBtn.style.color = isMuted ? "var(--wa-sub)" : "";
 }
-
-// notification mode
-let mode = localStorage.getItem("notifyMode") || "sound";
-function setMode(m) {
-    mode = m;
-    localStorage.setItem("notifyMode", m);
-}
-
-// sound (HTTP + HTTPS)
-function playSound() {
-    let snd = document.getElementById("notifySound");
-    snd.pause();
-    snd.currentTime = 0;
-    snd.play().catch(()=>{});  // catch for autoplay policy
-}
-
-// incoming message
-socketio.on("message", (data) => {
-    createMessage(data.name, data.message);
-
-    if (data.name === USERNAME) return;
-
-    if (mode === "sound") playSound();
+applyMute();
+muteBtn.addEventListener("click", () => {
+  isMuted = !isMuted;
+  localStorage.setItem("chat_muted", isMuted ? "1" : "0");
+  applyMute();
 });
 
-// send
-function sendMessage() {
-    const message = document.getElementById("message");
-    if (message.value.trim() === "") return;
-
-    socketio.emit("message", { data: message.value });
-    message.value = "";
+// ── Push notifications (only if signed in with Google) ─────────────────
+function urlBase64ToUint8Array(base64String) {
+  const padding = "=".repeat((4 - base64String.length % 4) % 4);
+  const base64 = (base64String + padding).replace(/-/g, "+").replace(/_/g, "/");
+  const rawData = atob(base64);
+  return Uint8Array.from([...rawData].map(c => c.charCodeAt(0)));
 }
-
-// enter key
-document.getElementById("message").addEventListener("keypress", (e) => {
-    if (e.key === "Enter") {
-        e.preventDefault();
-        sendMessage();
+async function setupPush() {
+  const googleSignedIn = {{ "true" if google_signed_in else "false" }};
+  if (!googleSignedIn) return;
+  if (!("serviceWorker" in navigator) || !("PushManager" in window)) return;
+  try {
+    const reg = await navigator.serviceWorker.register("{{ url_for('static', filename='sw.js') }}");
+    const perm = await Notification.requestPermission();
+    if (perm !== "granted") return;
+    const keyRes = await fetch("/vapid-public-key");
+    const { key } = await keyRes.json();
+    if (!key) return;
+    let sub = await reg.pushManager.getSubscription();
+    if (!sub) {
+      sub = await reg.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: urlBase64ToUint8Array(key)
+      });
     }
+    await fetch("/save-subscription", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-CSRF-Token": "{{ csrf_token() }}" },
+      body: JSON.stringify(sub)
+    });
+  } catch (err) {
+    console.log("Push setup failed:", err);
+  }
+}
+setupPush();
+
+// ── Members panel ──────────────────────────────────────────────────────
+const membersBtn   = document.getElementById("members-btn");
+const membersPanel = document.getElementById("members-panel");
+membersBtn.addEventListener("click", (e) => {
+  e.stopPropagation();
+  membersPanel.classList.toggle("hidden");
+});
+document.addEventListener("click", (e) => {
+  if (!membersPanel.contains(e.target) && e.target !== membersBtn)
+    membersPanel.classList.add("hidden");
+});
+
+// ── Messages ───────────────────────────────────────────────────────────
+function scrollToBottom() { messagesDiv.scrollTop = messagesDiv.scrollHeight; }
+function esc(s) {
+  const d = document.createElement("div");
+  d.innerText = s == null ? "" : String(s);
+  return d.innerHTML;
+}
+
+const seenState = {};   // msgId -> { seen_by: {user: ts}, all_seen: bool }
+
+function tickHtml(mid) {
+  const st = seenState[mid];
+  const allSeen = st && st.all_seen;
+  const color = allSeen ? "#53bdeb" : "currentColor";
+  return `<span class="msg-ticks" data-mid="${esc(mid)}" style="color:${color};cursor:pointer" title="Message info">
+    <svg viewBox="0 0 16 11" width="15" height="11" fill="none" stroke="currentColor" stroke-width="1.4">
+      <path d="M1 5.5 4.5 9 11 1.5"/><path d="M5.5 5.5 9 9 15.5 1.5"/>
+    </svg>
+  </span>`;
+}
+
+function createMessage(name, msg, timestamp, replyData, mid) {
+  const isOwn = name === USERNAME;
+  const div = document.createElement("div");
+  div.className = isOwn ? "right-message-box" : "left-message-box";
+  if (mid) div.dataset.mid = mid;
+  let replyHtml = "";
+  if (replyData) {
+    replyHtml = `<div class="reply-quote">
+      <div class="reply-quote-name">${esc(replyData.name)}</div>
+      <div class="reply-quote-text">${esc(replyData.message)}</div>
+    </div>`;
+  }
+  div.innerHTML = `${replyHtml}
+    <div class="username">${esc(name)}</div>
+    <div class="message">${esc(msg)}</div>
+    <div class="msg-footer">
+      <span class="timestamp">${esc(timestamp)}</span>
+      ${isOwn && mid ? tickHtml(mid) : ""}
+      <button class="reply-btn" title="Reply">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" width="13" height="13">
+          <polyline points="9 17 4 12 9 7"/><path d="M20 18v-2a4 4 0 0 0-4-4H4"/>
+        </svg>
+      </button>
+    </div>`;
+  div.querySelector(".reply-btn").addEventListener("click", (e) => {
+    e.stopPropagation(); setReplyTo({ name, message: msg });
+  });
+  if (isOwn && mid) {
+    div.querySelector(".msg-ticks")?.addEventListener("click", (e) => {
+      e.stopPropagation(); showSeenInfo(mid);
+    });
+  }
+  messagesDiv.appendChild(div);
+  if (!isOwn && mid) observeForSeen(div);
+  scrollToBottom();
+}
+
+async function createVoiceMessage(data) {
+  const isOwn = data.name === USERNAME;
+  const div = document.createElement("div");
+  div.className = isOwn ? "right-message-box" : "left-message-box";
+  if (data.id) div.dataset.mid = data.id;
+
+  let audioSrc = "";
+  try {
+    const bytes = await decryptBytes(data.audio);
+    const blob = new Blob([bytes], { type: data.mime || "audio/webm" });
+    audioSrc = URL.createObjectURL(blob);
+  } catch (e) { /* leave audioSrc empty, player will just show broken */ }
+
+  div.innerHTML = `
+    <div class="username">${esc(data.name)}</div>
+    <div class="voice-player">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" width="16" height="16" style="flex-shrink:0;opacity:.7">
+        <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
+        <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+      </svg>
+      <audio controls src="${audioSrc}" preload="metadata"></audio>
+    </div>
+    <div class="msg-footer">
+      <span class="timestamp">${esc(data.timestamp)}</span>
+      ${isOwn && data.id ? tickHtml(data.id) : ""}
+    </div>`;
+  if (isOwn && data.id) {
+    div.querySelector(".msg-ticks")?.addEventListener("click", (e) => {
+      e.stopPropagation(); showSeenInfo(data.id);
+    });
+  }
+  messagesDiv.appendChild(div);
+  if (!isOwn && data.id) observeForSeen(div);
+  scrollToBottom();
+}
+
+// ── Read receipts ────────────────────────────────────────────────────────
+let pendingSeenIds = new Set();
+let seenFlushTimer = null;
+function queueSeen(mid) {
+  pendingSeenIds.add(mid);
+  if (seenFlushTimer) return;
+  seenFlushTimer = setTimeout(() => {
+    if (pendingSeenIds.size) socketio.emit("mark_seen", { ids: Array.from(pendingSeenIds) });
+    pendingSeenIds = new Set();
+    seenFlushTimer = null;
+  }, 600);
+}
+const seenObserver = new IntersectionObserver((entries) => {
+  entries.forEach(entry => {
+    if (entry.isIntersecting && document.visibilityState === "visible") {
+      const mid = entry.target.dataset.mid;
+      if (mid) { queueSeen(mid); seenObserver.unobserve(entry.target); }
+    }
+  });
+}, { threshold: 0.6 });
+function observeForSeen(el) { seenObserver.observe(el); }
+
+socketio.on("seen_update", (u) => {
+  seenState[u.id] = { seen_by: u.seen_by, all_seen: u.all_seen };
+  const el = messagesDiv.querySelector(`[data-mid="${CSS.escape(u.id)}"] .msg-ticks`);
+  if (el) el.style.color = u.all_seen ? "#53bdeb" : "currentColor";
+});
+
+function showSeenInfo(mid) {
+  const st = seenState[mid];
+  const entries = st ? Object.entries(st.seen_by) : [];
+  const overlay = document.createElement("div");
+  overlay.style.cssText = "position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,.6);"
+    + "display:flex;align-items:center;justify-content:center;padding:24px;";
+  const rows = entries.length
+    ? entries.map(([u,ts]) => `<div style="display:flex;justify-content:space-between;gap:16px;padding:4px 0;">
+        <span>${esc(u)}</span><span style="opacity:.7">${new Date(ts*1000).toLocaleString()}</span>
+      </div>`).join("")
+    : `<div style="opacity:.7">No one has seen this message yet.</div>`;
+  overlay.innerHTML = `<div style="background:var(--panel,#1e1e1e);color:var(--text,#fff);
+      padding:20px 24px;border-radius:12px;max-width:320px;width:100%;">
+      <strong>Seen by</strong><div style="margin-top:10px">${rows}</div>
+      <button id="closeInfoBtn" style="margin-top:14px;padding:6px 14px;border:none;border-radius:6px;
+        background:#333;color:#fff;cursor:pointer;">Close</button>
+    </div>`;
+  overlay.addEventListener("click", (e) => { if (e.target === overlay) overlay.remove(); });
+  document.body.appendChild(overlay);
+  overlay.querySelector("#closeInfoBtn").addEventListener("click", () => overlay.remove());
+}
+
+function playSound() {
+  const snd = document.getElementById("notifySound");
+  snd.pause(); snd.currentTime = 0; snd.play().catch(()=>{});
+}
+
+// ── Reply ──────────────────────────────────────────────────────────────
+let replyTo = null;
+const replyBar     = document.getElementById("reply-bar");
+const replyBarName = document.getElementById("reply-bar-name");
+const replyBarText = document.getElementById("reply-bar-text");
+function setReplyTo(data) {
+  replyTo = data;
+  replyBarName.textContent = data.name;
+  replyBarText.textContent = data.message.length>80 ? data.message.slice(0,80)+"…" : data.message;
+  replyBar.classList.remove("hidden");
+  msgInput.focus();
+}
+function cancelReply() { replyTo=null; replyBar.classList.add("hidden"); }
+document.getElementById("reply-cancel-btn").addEventListener("click", cancelReply);
+
+// ── Send ───────────────────────────────────────────────────────────────
+async function sendMessage() {
+  const val = msgInput.value.trim(); if(!val) return;
+  const ciphertext = await encryptText(val);
+  let replyPayload = null;
+  if (replyTo) replyPayload = { name: replyTo.name, message: await encryptText(replyTo.message) };
+  socketio.emit("message",{type:"text",data:ciphertext,reply_to:replyPayload});
+  msgInput.value=""; cancelReply(); msgInput.focus();
+  stopTyping();
+  updateSendMicVisibility();
+}
+sendBtn.addEventListener("click", sendMessage);
+msgInput.addEventListener("keypress",(e)=>{ if(e.key==="Enter"){e.preventDefault();sendMessage();} });
+leaveBtn.addEventListener("click",()=>{ window.location.href="/logout"; });
+
+// ── Typing indicator ──────────────────────────────────────────────────
+const typingBar = document.getElementById("typing-indicator");
+let typingActive = false;
+let typingStopTimer = null;
+
+function stopTyping() {
+  if (typingActive) { typingActive = false; socketio.emit("typing", { active: false }); }
+  clearTimeout(typingStopTimer);
+}
+msgInput.addEventListener("input", () => {
+  if (msgInput.value.trim() === "") { stopTyping(); return; }
+  if (!typingActive) { typingActive = true; socketio.emit("typing", { active: true }); }
+  clearTimeout(typingStopTimer);
+  typingStopTimer = setTimeout(stopTyping, 2500);
+});
+
+const typingUsers = new Set();
+let typingClearTimers = {};
+socketio.on("typing", (data) => {
+  const name = data.name;
+  if (data.active) {
+    typingUsers.add(name);
+    clearTimeout(typingClearTimers[name]);
+    typingClearTimers[name] = setTimeout(() => { typingUsers.delete(name); renderTyping(); }, 4000);
+  } else {
+    typingUsers.delete(name);
+    clearTimeout(typingClearTimers[name]);
+  }
+  renderTyping();
+});
+function renderTyping() {
+  const names = Array.from(typingUsers);
+  if (names.length === 0) {
+    typingBar.textContent = "";
+    typingBar.classList.add("hidden");
+  } else if (names.length === 1) {
+    typingBar.textContent = `${names[0]} is typing…`;
+    typingBar.classList.remove("hidden");
+  } else if (names.length === 2) {
+    typingBar.textContent = `${names[0]} and ${names[1]} are typing…`;
+    typingBar.classList.remove("hidden");
+  } else {
+    typingBar.textContent = `${names.length} people are typing…`;
+    typingBar.classList.remove("hidden");
+  }
+}
+
+// ── Voice recording ────────────────────────────────────────────────────
+const VOICE_BITRATE = 32000; // 32kbps mono Opus — clear voice quality, small + predictable size
+let mediaRecorder=null, audioChunks=[], isRecording=false, recordTimer=null, recordStart=0;
+const micBtn = document.getElementById("mic-btn");
+micBtn.addEventListener("click",()=>{ isRecording ? stopRecording() : startRecording(); });
+async function startRecording() {
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({audio:{channelCount:1}});
+    audioChunks=[];
+    const mime=MediaRecorder.isTypeSupported("audio/webm;codecs=opus")?"audio/webm;codecs=opus"
+             : MediaRecorder.isTypeSupported("audio/webm")?"audio/webm":"audio/ogg";
+    mediaRecorder=new MediaRecorder(stream,{mimeType:mime, audioBitsPerSecond:VOICE_BITRATE});
+    mediaRecorder.ondataavailable=e=>{if(e.data.size>0)audioChunks.push(e.data);};
+    mediaRecorder.onstop=sendVoice;
+    mediaRecorder.start(200); isRecording=true; recordStart=Date.now();
+    micBtn.classList.add("recording");
+    recordTimer=setTimeout(stopRecording,60000);
+  } catch { alert("Microphone access denied."); }
+}
+function stopRecording() {
+  if(!isRecording)return; clearTimeout(recordTimer);
+  mediaRecorder.stop(); mediaRecorder.stream.getTracks().forEach(t=>t.stop());
+  isRecording=false; micBtn.classList.remove("recording");
+}
+async function sendVoice() {
+  const mime = audioChunks[0]?.type || "audio/webm";
+  const blob = new Blob(audioChunks, { type: mime });
+  const bytes = new Uint8Array(await blob.arrayBuffer());
+  const payload = await encryptBytes(bytes);   // AES-GCM only — no gzip, audio is already compressed by Opus
+  socketio.emit("message", {
+    type: "voice", audio: payload, mime,
+    duration: Math.round((Date.now() - recordStart) / 1000)
+  });
+}
+
+// swap mic ⇄ send depending on whether there's text to send
+function updateSendMicVisibility() {
+  const hasText = msgInput.value.trim().length > 0;
+  micBtn.classList.toggle("hidden", hasText);
+  sendBtn.classList.toggle("hidden", !hasText);
+}
+updateSendMicVisibility();
+msgInput.addEventListener("input", updateSendMicVisibility);
+
+// ── Fullscreen ─────────────────────────────────────────────────────────
+function fsElement() {
+  return document.fullscreenElement || document.webkitFullscreenElement ||
+         document.mozFullScreenElement || document.msFullscreenElement || null;
+}
+function requestFs(el) {
+  const fn = el.requestFullscreen || el.webkitRequestFullscreen ||
+             el.mozRequestFullScreen || el.msRequestFullscreen;
+  if (!fn) return Promise.reject(new Error("Fullscreen API not supported in this browser."));
+  const result = fn.call(el);
+  return result && result.catch ? result : Promise.resolve();
+}
+function exitFs() {
+  const fn = document.exitFullscreen || document.webkitExitFullscreen ||
+             document.mozCancelFullScreen || document.msExitFullscreen;
+  if (!fn) return Promise.reject(new Error("Fullscreen API not supported in this browser."));
+  const result = fn.call(document);
+  return result && result.catch ? result : Promise.resolve();
+}
+document.getElementById("fullscreen-btn").addEventListener("click",()=>{
+  if (!fsElement()) {
+    requestFs(roomWrapper).catch(err => console.warn("Fullscreen request failed:", err));
+  } else {
+    exitFs().catch(err => console.warn("Exit fullscreen failed:", err));
+  }
+});
+["fullscreenchange","webkitfullscreenchange","mozfullscreenchange","MSFullscreenChange"].forEach(evt => {
+  document.addEventListener(evt, () => {
+    const fs = !!fsElement();
+    document.getElementById("fs-expand").style.display   = fs ? "none"  : "block";
+    document.getElementById("fs-compress").style.display  = fs ? "block" : "none";
+  });
+});
+
+// ── Render history ─────────────────────────────────────────────────────
+(async () => {
+  const initialSeen = JSON.parse(document.getElementById("seen-data").textContent);
+  for (const [mid, seenBy] of Object.entries(initialSeen)) {
+    const total = Object.keys(seenBy).length;
+    seenState[mid] = { seen_by: seenBy, all_seen: total > 0 };
+  }
+
+  const history = JSON.parse(document.getElementById("history-data").textContent);
+  for (const msg of history) {
+    if (msg.type === "voice") {
+      await createVoiceMessage(msg);
+    } else {
+      const text = await decryptText(msg.message);
+      let replyTo = msg.reply_to || null;
+      if (replyTo && replyTo.message) replyTo = {...replyTo, message: await decryptText(replyTo.message)};
+      createMessage(msg.name, text, msg.timestamp, replyTo, msg.id);
+    }
+  }
+})();
+
 });
 </script>
 
-{% for msg in messages %}
-<script>
-createMessage("{{ msg.name }}", "{{ msg.message }}");
+<script id="history-data" type="application/json">
+{{ messages | tojson }}
 </script>
-{% endfor %}
+<script id="seen-data" type="application/json">
+{{ seen | tojson }}
+</script>
 
 {% endblock %}
