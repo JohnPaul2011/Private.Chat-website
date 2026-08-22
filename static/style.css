@@ -207,10 +207,12 @@ a:hover { text-decoration: underline; }
 
 /* compact variant for the navbar (icon still visible, tighter padding, narrower fixed width) */
 .google-pill--nav {
-  width: 150px;
-  padding: 6px 16px 6px 6px;
-  font-size: 13px;
+  width: 118px;
+  padding: 5px 12px 5px 5px;
+  font-size: 12px;
+  gap: 7px;
 }
+.google-pill--nav svg { width: 16px; height: 16px; }
 
 /* signed-in state pill (shows account instead of sign-in) */
 .google-pill--signed-in {
@@ -365,6 +367,123 @@ li { position: relative; }
   padding: 0 10px 0 4px;
 }
 .nav-pill-slot .google-pill--nav { margin: 0; }
+
+/* ── Friend request bell + dialog ─────────────────────────── */
+.nav-bell {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 38px;
+  height: 38px;
+  border: none;
+  background: none;
+  color: var(--wa-sub);
+  cursor: pointer;
+  border-radius: 50%;
+  transition: background .15s, color .15s;
+}
+.nav-bell:hover { background: var(--nav-hover-bg); color: var(--wa-text); }
+.nav-bell-badge {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  background: #c62828;
+  color: #fff;
+  font-size: 10px;
+  font-weight: 700;
+  min-width: 15px;
+  height: 15px;
+  border-radius: 100px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 3px;
+  line-height: 1;
+}
+
+.fr-dialog-backdrop {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,.35);
+  z-index: 200;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 90px;
+}
+.fr-dialog-backdrop.open { display: flex; }
+.fr-dialog {
+  width: 100%;
+  max-width: 420px;
+  margin: 0 16px;
+  background: var(--form-bg);
+  border-radius: var(--radius);
+  border: 1px solid var(--form-border);
+  box-shadow: 0 12px 40px rgba(0,0,0,.25);
+  max-height: 70vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.fr-dialog-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--form-border);
+  font-weight: 600;
+  font-size: 15px;
+  color: var(--wa-text);
+}
+.fr-dialog-close {
+  background: none;
+  border: none;
+  font-size: 20px;
+  line-height: 1;
+  color: var(--wa-sub);
+  cursor: pointer;
+  padding: 2px 6px;
+}
+.fr-dialog-close:hover { color: var(--wa-text); }
+.fr-dialog-body {
+  overflow-y: auto;
+  padding: 6px 10px;
+}
+.fr-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 6px;
+  border-bottom: 1px solid var(--form-border);
+}
+.fr-item:last-child { border-bottom: none; }
+.fr-actions {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+}
+.fr-btn {
+  border-radius: 100px;
+  padding: 6px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  font-family: var(--font-main);
+  border: 1px solid transparent;
+}
+.fr-accept {
+  background: var(--wa-green-dark);
+  color: #fff;
+}
+.fr-accept:hover { background: var(--wa-green-teal); }
+.fr-decline {
+  background: none;
+  border-color: var(--form-border);
+  color: var(--wa-sub);
+}
+.fr-decline:hover { border-color: #c62828; color: #c62828; }
+.fr-btn:disabled { opacity: .5; cursor: default; }
 
 li a, .dropbtn {
   display: flex;

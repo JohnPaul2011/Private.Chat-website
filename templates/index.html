@@ -118,6 +118,20 @@
     </li>
     {% endif %}
     <li class="li-right">
+      {% if google_signed_in %}
+      <button class="nav-bell" id="friend-req-bell" title="Friend requests" type="button">
+        <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><line x1="19" y1="8" x2="19" y2="14"/><line x1="22" y1="11" x2="16" y2="11"/>
+        </svg>
+        {% if pending_requests %}<span class="nav-bell-badge" id="friend-req-badge">{{ pending_requests | length }}</span>{% endif %}
+      </button>
+      {% endif %}
+    </li>
+    <li class="nav-pill-slot">
+      {% set pill_class = "google-pill--nav" %}
+      {% include "_google_pill.html" %}
+    </li>
+    <li>
       <a href="#about">
         <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>
@@ -125,11 +139,39 @@
         <span class="nav-label">Help</span>
       </a>
     </li>
-    <li class="nav-pill-slot">
-      {% set pill_class = "google-pill--nav" %}
-      {% include "_google_pill.html" %}
-    </li>
   </ul>
+
+  {% if google_signed_in %}
+  <div class="fr-dialog-backdrop" id="fr-dialog-backdrop">
+    <div class="fr-dialog" role="dialog" aria-label="Friend requests">
+      <div class="fr-dialog-head">
+        <span>Friend Requests</span>
+        <button class="fr-dialog-close" id="fr-dialog-close" type="button" aria-label="Close">&times;</button>
+      </div>
+      <div class="fr-dialog-body" id="fr-dialog-body">
+        {% if pending_requests %}
+          {% for req in pending_requests %}
+          <div class="fr-item" data-request-id="{{ req.id }}">
+            <div class="home-item-icon">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><line x1="19" y1="8" x2="19" y2="14"/><line x1="22" y1="11" x2="16" y2="11"/></svg>
+            </div>
+            <div class="home-item-body" style="flex:1;">
+              <div class="home-item-title">{{ req.sender_email or "Unknown" }}</div>
+              <div class="home-item-sub">wants to be your friend</div>
+            </div>
+            <div class="fr-actions">
+              <button class="fr-btn fr-accept" type="button">Accept</button>
+              <button class="fr-btn fr-decline" type="button">Decline</button>
+            </div>
+          </div>
+          {% endfor %}
+        {% else %}
+        <p class="home-empty" id="fr-empty-msg">No pending friend requests.</p>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+  {% endif %}
 
   {% block main %}
   {% if google_signed_in %}
@@ -188,7 +230,7 @@
             <div class="home-item-icon friend-avatar">{{ (f.friend_email or "?")[0] | upper }}</div>
             <div class="home-item-body">
               <div class="home-item-title">{{ f.friend_email or f.friend_google_id }}</div>
-              <div class="home-item-sub">{{ "Linked" if not f.friend_google_id.startswith("pending:") else "Pending" }}</div>
+              <div class="home-item-sub">Linked</div>
             </div>
           </div>
           {% endfor %}
@@ -217,6 +259,58 @@
           if (badge) badge.remove();
         } catch (e) { /* no-op */ }
         btn.disabled = false;
+      });
+    })();
+
+    (function() {
+      const bell = document.getElementById("friend-req-bell");
+      const backdrop = document.getElementById("fr-dialog-backdrop");
+      const closeBtn = document.getElementById("fr-dialog-close");
+      if (!bell || !backdrop) return;
+
+      bell.addEventListener("click", () => backdrop.classList.add("open"));
+      closeBtn.addEventListener("click", () => backdrop.classList.remove("open"));
+      backdrop.addEventListener("click", (e) => {
+        if (e.target === backdrop) backdrop.classList.remove("open");
+      });
+
+      function checkEmpty() {
+        const body = document.getElementById("fr-dialog-body");
+        if (body && !body.querySelector(".fr-item")) {
+          body.innerHTML = '<p class="home-empty">No pending friend requests.</p>';
+        }
+        const remaining = document.querySelectorAll(".fr-item").length;
+        const badge = document.getElementById("friend-req-badge");
+        if (badge) {
+          if (remaining > 0) badge.textContent = remaining;
+          else badge.remove();
+        }
+      }
+
+      document.querySelectorAll(".fr-item").forEach((item) => {
+        const id = item.dataset.requestId;
+        item.querySelector(".fr-accept").addEventListener("click", async (e) => {
+          const b = e.target; b.disabled = true;
+          try {
+            const res = await fetch(`/api/friend-requests/${id}/accept`, {
+              method: "POST",
+              headers: { "X-CSRF-Token": "{{ csrf_token() }}" }
+            });
+            if (res.ok) { item.remove(); checkEmpty(); }
+            else b.disabled = false;
+          } catch (err) { b.disabled = false; }
+        });
+        item.querySelector(".fr-decline").addEventListener("click", async (e) => {
+          const b = e.target; b.disabled = true;
+          try {
+            const res = await fetch(`/api/friend-requests/${id}/decline`, {
+              method: "POST",
+              headers: { "X-CSRF-Token": "{{ csrf_token() }}" }
+            });
+            if (res.ok) { item.remove(); checkEmpty(); }
+            else b.disabled = false;
+          } catch (err) { b.disabled = false; }
+        });
       });
     })();
   </script>

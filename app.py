@@ -154,9 +154,21 @@ def sb_remove_friend(owner_google_id, friend_google_id):
         return False
 
 def sb_find_user_by_email(email):
-    """Look up a known google_id for an email, from anyone who has ever shown up as a friend row
-    (owner or friend side) or currently has a push subscription. Best-effort only."""
+    """Look up a known google_id for an email via chat_profiles (every Google user who has
+    signed in at least once has a row there). Falls back to chat_friends for older data."""
     if not supabase_available() or not email: return None
+    try:
+        r = _requests.get(
+            f"{SUPABASE_URL}/rest/v1/chat_profiles",
+            headers=_supabase_headers(),
+            params={"email": f"eq.{email}", "limit": 1},
+            timeout=8,
+        )
+        r.raise_for_status()
+        rows = r.json()
+        if rows: return rows[0]["google_id"]
+    except Exception as e:
+        logging.info(f"Supabase find_user_by_email (profiles) failed: {e}")
     try:
         r = _requests.get(
             f"{SUPABASE_URL}/rest/v1/chat_friends",
@@ -168,8 +180,103 @@ def sb_find_user_by_email(email):
         rows = r.json()
         if rows: return rows[0]["friend_google_id"]
     except Exception as e:
-        logging.info(f"Supabase find_user_by_email failed: {e}")
+        logging.info(f"Supabase find_user_by_email (friends) failed: {e}")
     return None
+
+# ─────────────────────────────── friend requests ─────────────────────────────
+def sb_create_friend_request(sender_gid, sender_email, recipient_email, recipient_gid=None):
+    if not supabase_available(): return False, "Storage not configured"
+    try:
+        r = _requests.post(
+            f"{SUPABASE_URL}/rest/v1/chat_friend_requests",
+            headers=_supabase_headers(),
+            json={
+                "sender_google_id": sender_gid,
+                "sender_email": sender_email,
+                "recipient_google_id": recipient_gid,
+                "recipient_email": recipient_email,
+                "status": "pending",
+            },
+            timeout=8,
+        )
+        if r.status_code >= 400:
+            if r.status_code == 409 or "duplicate" in r.text.lower():
+                return False, "You already have a pending request to this person."
+            return False, r.text[:200]
+        return True, None
+    except Exception as e:
+        return False, str(e)
+
+def sb_list_incoming_requests(recipient_gid, status="pending"):
+    if not supabase_available() or not recipient_gid: return []
+    try:
+        r = _requests.get(
+            f"{SUPABASE_URL}/rest/v1/chat_friend_requests",
+            headers=_supabase_headers(),
+            params={
+                "recipient_google_id": f"eq.{recipient_gid}",
+                "status": f"eq.{status}",
+                "order": "created_at.desc",
+            },
+            timeout=8,
+        )
+        r.raise_for_status()
+        return r.json()
+    except Exception as e:
+        logging.info(f"Supabase list_incoming_requests failed: {e}")
+        return []
+
+def sb_count_pending_requests(recipient_gid):
+    if not supabase_available() or not recipient_gid: return 0
+    try:
+        r = _requests.get(
+            f"{SUPABASE_URL}/rest/v1/chat_friend_requests",
+            headers={**_supabase_headers(), "Prefer": "count=exact"},
+            params={"recipient_google_id": f"eq.{recipient_gid}", "status": "eq.pending", "select": "id"},
+            timeout=8,
+        )
+        r.raise_for_status()
+        cr = r.headers.get("Content-Range","")
+        if "/" in cr:
+            total = cr.split("/")[-1]
+            return int(total) if total.isdigit() else 0
+        return len(r.json())
+    except Exception as e:
+        logging.info(f"Supabase count_pending_requests failed: {e}")
+        return 0
+
+def sb_get_friend_request(request_id):
+    if not supabase_available(): return None
+    try:
+        r = _requests.get(
+            f"{SUPABASE_URL}/rest/v1/chat_friend_requests",
+            headers=_supabase_headers(),
+            params={"id": f"eq.{request_id}", "limit": 1},
+            timeout=8,
+        )
+        r.raise_for_status()
+        rows = r.json()
+        return rows[0] if rows else None
+    except Exception as e:
+        logging.info(f"Supabase get_friend_request failed: {e}")
+        return None
+
+def sb_respond_friend_request(request_id, status):
+    """status: 'accepted' or 'declined'"""
+    if not supabase_available(): return False
+    try:
+        r = _requests.patch(
+            f"{SUPABASE_URL}/rest/v1/chat_friend_requests",
+            headers=_supabase_headers(),
+            params={"id": f"eq.{request_id}"},
+            json={"status": status, "responded_at": datetime.datetime.utcnow().isoformat()},
+            timeout=8,
+        )
+        return r.status_code < 400
+    except Exception as e:
+        logging.info(f"Supabase respond_friend_request failed: {e}")
+        return False
+
 
 def sb_get_profile(google_id):
     if not supabase_available() or not google_id: return None
@@ -376,19 +483,33 @@ def create_rate_limited(key):
 
 
 # ─────────────────────────────── chat routes ────────────────────────────────
+@app.before_request
+def _verify_google_session_once():
+    """On the first request of a browser session, refresh identity info (preferred name) from
+    Supabase so the UI reflects the latest saved profile even if it changed on another device.
+    Cheap no-op on every request after the first via a session flag."""
+    if session.get("google_id") and not session.get("_google_verified"):
+        if supabase_available():
+            profile = sb_get_profile(session["google_id"])
+            if profile and profile.get("display_name"):
+                session["preferred_name"] = profile["display_name"]
+        session["_google_verified"] = True
+
 @app.route("/")
 def index():
     gid = session.get("google_id")
-    friends, notifications = [], []
+    friends, notifications, pending_requests = [], [], []
     if gid:
         friends = sb_list_friends(gid)
         notifications = sb_list_notifications(gid, limit=20)
+        pending_requests = sb_list_incoming_requests(gid)
     return render_template(
         "index.html",
         username=session.get("name","Guest"),
         google_signed_in=bool(gid),
         home_friends=friends,
         home_notifications=notifications,
+        pending_requests=pending_requests,
     )
 
 @app.route("/auth/google/login")
@@ -430,6 +551,7 @@ def google_logout():
     gid = session.pop("google_id", None)
     session.pop("google_email", None)
     session.pop("preferred_name", None)
+    session.pop("_google_verified", None)
     if gid:
         with _state_lock:
             push_subscriptions.pop(gid, None)
@@ -521,27 +643,26 @@ def add_friend():
         return redirect(url_for("account"))
 
     friend_gid = sb_find_user_by_email(email)
-    ok, err = sb_add_friend(
-        owner_google_id=gid,
-        owner_email=session.get("google_email",""),
-        friend_google_id=friend_gid or f"pending:{email}",
-        friend_email=email,
-        friend_display_name=None,
+    my_email = session.get("google_email","")
+    ok, err = sb_create_friend_request(
+        sender_gid=gid,
+        sender_email=my_email,
+        recipient_email=email,
+        recipient_gid=friend_gid,
     )
     if ok:
         if friend_gid:
-            flash(f"Added {email} as a friend.","info")
-            my_email = session.get("google_email","")
+            flash(f"Friend request sent to {email}.","info")
             sb_add_notification(
-                friend_gid, "friend_added",
-                "New friend added you",
-                f"{my_email or 'Someone'} added you as a friend.",
+                friend_gid, "friend_request",
+                "New friend request",
+                f"{my_email or 'Someone'} wants to be your friend.",
             )
-            send_push(friend_gid, "New friend", f"{my_email or 'Someone'} added you as a friend.")
+            send_push(friend_gid, "New friend request", f"{my_email or 'Someone'} wants to be your friend.")
         else:
-            flash(f"Added {email}. They'll be fully linked once they sign in with Google and are added back.","info")
+            flash(f"Request sent to {email}. They'll see it once they sign in with Google.","info")
     else:
-        flash(f"Couldn't add friend: {err or 'unknown error'}","error")
+        flash(err or "Couldn't send friend request.","error")
     return redirect(url_for("account"))
 
 @app.route("/account/friends/remove", methods=["POST"])
@@ -555,6 +676,49 @@ def remove_friend():
     else:
         flash("Couldn't remove friend.","error")
     return redirect(url_for("account"))
+
+@app.route("/api/friend-requests")
+def api_friend_requests():
+    gid = session.get("google_id")
+    if not gid:
+        return jsonify({"requests": []})
+    reqs = sb_list_incoming_requests(gid)
+    return jsonify({"requests": reqs})
+
+@app.route("/api/friend-requests/<request_id>/accept", methods=["POST"])
+def api_accept_friend_request(request_id):
+    check_csrf()
+    require_google()
+    gid = session["google_id"]
+    req = sb_get_friend_request(request_id)
+    if not req or req.get("recipient_google_id") != gid or req.get("status") != "pending":
+        return jsonify({"ok": False, "error": "Request not found."}), 404
+
+    sb_respond_friend_request(request_id, "accepted")
+
+    my_email = session.get("google_email","")
+    # link both directions
+    sb_add_friend(gid, my_email, req["sender_google_id"], req.get("sender_email",""), None)
+    sb_add_friend(req["sender_google_id"], req.get("sender_email",""), gid, my_email, None)
+
+    sb_add_notification(
+        req["sender_google_id"], "friend_added",
+        "Friend request accepted",
+        f"{my_email or 'Someone'} accepted your friend request.",
+    )
+    send_push(req["sender_google_id"], "Friend request accepted", f"{my_email or 'Someone'} accepted your friend request.")
+    return jsonify({"ok": True})
+
+@app.route("/api/friend-requests/<request_id>/decline", methods=["POST"])
+def api_decline_friend_request(request_id):
+    check_csrf()
+    require_google()
+    gid = session["google_id"]
+    req = sb_get_friend_request(request_id)
+    if not req or req.get("recipient_google_id") != gid or req.get("status") != "pending":
+        return jsonify({"ok": False, "error": "Request not found."}), 404
+    sb_respond_friend_request(request_id, "declined")
+    return jsonify({"ok": True})
 
 @app.route("/api/notifications/mark-read", methods=["POST"])
 def api_mark_notifications_read():

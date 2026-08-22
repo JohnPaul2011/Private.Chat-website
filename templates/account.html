@@ -176,9 +176,7 @@
           <div class="friend-row">
             <div>
               <div class="friend-email">{{ f.friend_email or f.friend_google_id }}</div>
-              <div class="friend-status">
-                {{ "Linked" if not f.friend_google_id.startswith("pending:") else "Pending — hasn't signed in yet" }}
-              </div>
+              <div class="friend-status">Linked</div>
             </div>
             <form method="POST" action="/account/friends/remove">
               <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
@@ -194,8 +192,11 @@
         <form method="POST" action="/account/friends/add" class="add-friend-form">
           <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
           <input type="email" name="friend_email" placeholder="Friend's Google email" required>
-          <button type="submit" class="acct-btn">Add</button>
+          <button type="submit" class="acct-btn">Send request</button>
         </form>
+        <p class="empty-state" style="padding-top:8px;">
+          Sends a friend request — they'll need to accept it before you're linked.
+        </p>
       {% endif %}
     </div>
   </div>
