@@ -292,6 +292,43 @@ a:hover { text-decoration: underline; }
   text-decoration: none;
 }
 .home-window-action:hover { text-decoration: underline; }
+
+.home-add-friend-form {
+  display: flex;
+  gap: 8px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--form-border);
+  flex-shrink: 0;
+}
+.home-add-friend-form input {
+  flex: 1;
+  min-width: 0;
+  padding: 7px 12px;
+  border-radius: 100px;
+  border: 1px solid var(--form-border);
+  background: var(--form-input-bg);
+  color: var(--wa-text);
+  font-family: var(--font-main);
+  font-size: 12.5px;
+}
+.home-add-friend-form .home-add-friend-btn {
+  flex: 0 0 auto;
+  width: 32px !important;
+  height: 32px;
+  border-radius: 50%;
+  border: 1px solid var(--wa-green-dark);
+  background: none !important;
+  color: var(--wa-green-dark);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  margin: 0;
+}
+.home-add-friend-btn svg { width: 15px; height: 15px; }
+.home-add-friend-btn:hover { background: var(--wa-green-dark); color: #fff; }
+.fr-dialog-add-form { padding: 10px 16px; }
+
 .home-window-body {
   overflow-y: auto;
   padding: 6px 10px;
