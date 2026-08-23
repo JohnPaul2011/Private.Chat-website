@@ -226,6 +226,39 @@ def sb_list_incoming_requests(recipient_gid, status="pending"):
         logging.info(f"Supabase list_incoming_requests failed: {e}")
         return []
 
+def sb_list_outgoing_requests(sender_gid, status="pending"):
+    if not supabase_available() or not sender_gid: return []
+    try:
+        r = _requests.get(
+            f"{SUPABASE_URL}/rest/v1/chat_friend_requests",
+            headers=_supabase_headers(),
+            params={
+                "sender_google_id": f"eq.{sender_gid}",
+                "status": f"eq.{status}",
+                "order": "created_at.desc",
+            },
+            timeout=8,
+        )
+        r.raise_for_status()
+        return r.json()
+    except Exception as e:
+        logging.info(f"Supabase list_outgoing_requests failed: {e}")
+        return []
+
+def sb_cancel_friend_request(request_id, sender_gid):
+    if not supabase_available(): return False
+    try:
+        r = _requests.delete(
+            f"{SUPABASE_URL}/rest/v1/chat_friend_requests",
+            headers=_supabase_headers(),
+            params={"id": f"eq.{request_id}", "sender_google_id": f"eq.{sender_gid}", "status": "eq.pending"},
+            timeout=8,
+        )
+        return r.status_code < 400
+    except Exception as e:
+        logging.info(f"Supabase cancel_friend_request failed: {e}")
+        return False
+
 def sb_count_pending_requests(recipient_gid):
     if not supabase_available() or not recipient_gid: return 0
     try:
@@ -498,11 +531,12 @@ def _verify_google_session_once():
 @app.route("/")
 def index():
     gid = session.get("google_id")
-    friends, notifications, pending_requests = [], [], []
+    friends, notifications, pending_requests, outgoing_requests = [], [], [], []
     if gid:
         friends = sb_list_friends(gid)
         notifications = sb_list_notifications(gid, limit=20)
         pending_requests = sb_list_incoming_requests(gid)
+        outgoing_requests = sb_list_outgoing_requests(gid)
     return render_template(
         "index.html",
         username=session.get("name","Guest"),
@@ -510,6 +544,7 @@ def index():
         home_friends=friends,
         home_notifications=notifications,
         pending_requests=pending_requests,
+        outgoing_requests=outgoing_requests,
     )
 
 @app.route("/auth/google/login")
@@ -718,6 +753,16 @@ def api_decline_friend_request(request_id):
     if not req or req.get("recipient_google_id") != gid or req.get("status") != "pending":
         return jsonify({"ok": False, "error": "Request not found."}), 404
     sb_respond_friend_request(request_id, "declined")
+    return jsonify({"ok": True})
+
+@app.route("/api/friend-requests/<request_id>/cancel", methods=["POST"])
+def api_cancel_friend_request(request_id):
+    check_csrf()
+    require_google()
+    gid = session["google_id"]
+    ok = sb_cancel_friend_request(request_id, gid)
+    if not ok:
+        return jsonify({"ok": False, "error": "Couldn't cancel request."}), 404
     return jsonify({"ok": True})
 
 @app.route("/api/notifications/mark-read", methods=["POST"])

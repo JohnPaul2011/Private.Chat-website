@@ -148,7 +148,15 @@
         <span>Friend Requests</span>
         <button class="fr-dialog-close" id="fr-dialog-close" type="button" aria-label="Close">&times;</button>
       </div>
-      <div class="fr-dialog-body" id="fr-dialog-body">
+      <div class="fr-tabs">
+        <button class="fr-tab active" data-tab="received" type="button">
+          Received {% if pending_requests %}<span class="fr-tab-count">{{ pending_requests | length }}</span>{% endif %}
+        </button>
+        <button class="fr-tab" data-tab="pending" type="button">
+          Pending {% if outgoing_requests %}<span class="fr-tab-count">{{ outgoing_requests | length }}</span>{% endif %}
+        </button>
+      </div>
+      <div class="fr-dialog-body" id="fr-dialog-body-received">
         {% if pending_requests %}
           {% for req in pending_requests %}
           <div class="fr-item" data-request-id="{{ req.id }}">
@@ -166,7 +174,27 @@
           </div>
           {% endfor %}
         {% else %}
-        <p class="home-empty" id="fr-empty-msg">No pending friend requests.</p>
+        <p class="home-empty">No pending friend requests.</p>
+        {% endif %}
+      </div>
+      <div class="fr-dialog-body" id="fr-dialog-body-pending" hidden>
+        {% if outgoing_requests %}
+          {% for req in outgoing_requests %}
+          <div class="fr-item" data-request-id="{{ req.id }}">
+            <div class="home-item-icon">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+            </div>
+            <div class="home-item-body" style="flex:1;">
+              <div class="home-item-title">{{ req.recipient_email or "Unknown" }}</div>
+              <div class="home-item-sub">Waiting for them to accept</div>
+            </div>
+            <div class="fr-actions">
+              <button class="fr-btn fr-decline fr-cancel" type="button">Cancel</button>
+            </div>
+          </div>
+          {% endfor %}
+        {% else %}
+        <p class="home-empty">No pending sent requests.</p>
         {% endif %}
       </div>
     </div>
@@ -274,12 +302,30 @@
         if (e.target === backdrop) backdrop.classList.remove("open");
       });
 
-      function checkEmpty() {
-        const body = document.getElementById("fr-dialog-body");
-        if (body && !body.querySelector(".fr-item")) {
-          body.innerHTML = '<p class="home-empty">No pending friend requests.</p>';
+      // ── tab switching ──
+      const tabs = document.querySelectorAll(".fr-tab");
+      const bodies = {
+        received: document.getElementById("fr-dialog-body-received"),
+        pending: document.getElementById("fr-dialog-body-pending"),
+      };
+      tabs.forEach((tab) => {
+        tab.addEventListener("click", () => {
+          tabs.forEach(t => t.classList.remove("active"));
+          tab.classList.add("active");
+          Object.entries(bodies).forEach(([key, el]) => {
+            el.hidden = key !== tab.dataset.tab;
+          });
+        });
+      });
+
+      function checkEmpty(bodyEl, emptyText) {
+        if (bodyEl && !bodyEl.querySelector(".fr-item")) {
+          bodyEl.innerHTML = `<p class="home-empty">${emptyText}</p>`;
         }
-        const remaining = document.querySelectorAll(".fr-item").length;
+      }
+
+      function updateBellBadge() {
+        const remaining = bodies.received.querySelectorAll(".fr-item").length;
         const badge = document.getElementById("friend-req-badge");
         if (badge) {
           if (remaining > 0) badge.textContent = remaining;
@@ -287,7 +333,23 @@
         }
       }
 
-      document.querySelectorAll(".fr-item").forEach((item) => {
+      function updateTabCount(tabKey, count) {
+        const tab = document.querySelector(`.fr-tab[data-tab="${tabKey}"]`);
+        if (!tab) return;
+        let countEl = tab.querySelector(".fr-tab-count");
+        if (count > 0) {
+          if (!countEl) {
+            countEl = document.createElement("span");
+            countEl.className = "fr-tab-count";
+            tab.appendChild(countEl);
+          }
+          countEl.textContent = count;
+        } else if (countEl) {
+          countEl.remove();
+        }
+      }
+
+      bodies.received.querySelectorAll(".fr-item").forEach((item) => {
         const id = item.dataset.requestId;
         item.querySelector(".fr-accept").addEventListener("click", async (e) => {
           const b = e.target; b.disabled = true;
@@ -296,8 +358,12 @@
               method: "POST",
               headers: { "X-CSRF-Token": "{{ csrf_token() }}" }
             });
-            if (res.ok) { item.remove(); checkEmpty(); }
-            else b.disabled = false;
+            if (res.ok) {
+              item.remove();
+              checkEmpty(bodies.received, "No pending friend requests.");
+              updateBellBadge();
+              updateTabCount("received", bodies.received.querySelectorAll(".fr-item").length);
+            } else b.disabled = false;
           } catch (err) { b.disabled = false; }
         });
         item.querySelector(".fr-decline").addEventListener("click", async (e) => {
@@ -307,8 +373,30 @@
               method: "POST",
               headers: { "X-CSRF-Token": "{{ csrf_token() }}" }
             });
-            if (res.ok) { item.remove(); checkEmpty(); }
-            else b.disabled = false;
+            if (res.ok) {
+              item.remove();
+              checkEmpty(bodies.received, "No pending friend requests.");
+              updateBellBadge();
+              updateTabCount("received", bodies.received.querySelectorAll(".fr-item").length);
+            } else b.disabled = false;
+          } catch (err) { b.disabled = false; }
+        });
+      });
+
+      bodies.pending.querySelectorAll(".fr-item").forEach((item) => {
+        const id = item.dataset.requestId;
+        item.querySelector(".fr-cancel").addEventListener("click", async (e) => {
+          const b = e.target; b.disabled = true;
+          try {
+            const res = await fetch(`/api/friend-requests/${id}/cancel`, {
+              method: "POST",
+              headers: { "X-CSRF-Token": "{{ csrf_token() }}" }
+            });
+            if (res.ok) {
+              item.remove();
+              checkEmpty(bodies.pending, "No pending sent requests.");
+              updateTabCount("pending", bodies.pending.querySelectorAll(".fr-item").length);
+            } else b.disabled = false;
           } catch (err) { b.disabled = false; }
         });
       });
