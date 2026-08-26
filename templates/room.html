@@ -169,7 +169,14 @@ const status      = document.getElementById("conn-status");  // doesn't exist bu
 const roomWrapper = document.querySelector(".room-wrapper");
 
 // ── Socket ─────────────────────────────────────────────────────────────
-const socketio = io({ transports: ["polling"] });
+const socketio = io({
+  transports: ["polling", "websocket"],
+  reconnection: true,
+  reconnectionAttempts: Infinity,
+  reconnectionDelay: 500,
+  reconnectionDelayMax: 2000,
+  timeout: 10000
+});
 
 socketio.on("connect", () => {
   if (document.getElementById("conn-status")) {

@@ -211,114 +211,363 @@
   {% endif %}
 
   {% block main %}
-  {% if google_signed_in %}
-  <div class="home-windows">
-    <div class="home-window" id="notif-window">
-      <div class="home-window-head">
-        <div class="home-window-title">
-          <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>
-          </svg>
-          <span>Friend Requests</span>
+  <div class="chat-app-wrapper">
+    <div class="chat-app-card" id="chat-app-card">
+
+      <!-- ── Retractable Hover Contact List Sidebar ── -->
+      <aside class="chat-hover-sidebar" id="chat-hover-sidebar">
+        <!-- Top Section & Search -->
+        <div class="sidebar-top-section">
+          <div class="sidebar-brand-pill">
+            <div class="sidebar-brand-icon">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20">
+                <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/>
+                <circle cx="9" cy="7" r="4"/>
+                <path d="M23 21v-2a4 4 0 0 0-3-3.87"/>
+                <path d="M16 3.13a4 4 0 0 1 0 7.75"/>
+              </svg>
+            </div>
+            <span class="sidebar-brand-title">Contacts</span>
+          </div>
+
+          <!-- Search (revealed on hover) -->
+          <div class="sidebar-search-box">
+            <input type="text" id="contact-quick-search" placeholder="Search contacts…" oninput="filterContactList(this.value)">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
+              <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+            </svg>
+          </div>
+        </div>
+
+        <!-- Scrollable Contacts -->
+        <div class="sidebar-contacts-list" id="sidebar-contacts-list">
+          {% if home_friends %}
+            {% for f in home_friends %}
+            {% set fname = f.friend_display_name or (f.friend_email.split('@')[0] if f.friend_email else 'Friend') %}
+            {% set femail = f.friend_email or '' %}
+            {% set fchar = (fname or femail or '?')[0] | upper %}
+            <div class="sidebar-contact-item {% if loop.first %}active{% endif %}" 
+                 data-friend-gid="{{ f.friend_google_id or f.friend_email }}"
+                 data-chat-name="{{ fname }}"
+                 data-friend-email="{{ femail }}"
+                 data-initial="{{ fchar }}"
+                 onclick="onSidebarContactClick(this)">
+              <div class="sidebar-contact-avatar">
+                <div class="chat-avatar-initial">{{ fchar }}</div>
+                <span class="sidebar-online-dot"></span>
+              </div>
+              <div class="sidebar-contact-info">
+                <div class="sidebar-contact-name">{{ fname }}</div>
+                <div class="sidebar-contact-sub">{{ femail or 'End-to-End Encrypted' }}</div>
+              </div>
+            </div>
+            {% endfor %}
+          {% else %}
+            <div class="sidebar-empty-contacts">
+              <p>No contacts yet</p>
+              <a href="/account" class="sidebar-add-btn">+ Add Friends</a>
+            </div>
+          {% endif %}
+        </div>
+
+        <!-- Bottom Options (Account Settings & Logout) -->
+        <div class="sidebar-footer-section">
+          <a href="/account" class="sidebar-footer-link" title="Account Settings">
+            <div class="sidebar-footer-icon">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18">
+                <circle cx="12" cy="12" r="3"/>
+                <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+              </svg>
+            </div>
+            <span class="sidebar-footer-label">Account Settings</span>
+          </a>
+
+          <a href="/logout" class="sidebar-footer-link sidebar-logout-link" title="Logout">
+            <div class="sidebar-footer-icon">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18">
+                <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/>
+                <polyline points="16 17 21 12 16 7"/>
+                <line x1="21" y1="12" x2="9" y2="12"/>
+              </svg>
+            </div>
+            <span class="sidebar-footer-label">Log Out</span>
+          </a>
+        </div>
+      </aside>
+
+      <!-- ── Central Chat Main Area ── -->
+      <div class="chat-main-pane" id="chat-main-pane">
+        <div class="chat-main-head">
+          <div class="chat-head-left" onclick="toggleDetailsDrawer()">
+            <div class="chat-avatar-wrap" id="chat-active-avatar">
+              {% if home_friends %}
+              <div class="chat-avatar-initial">{{ (home_friends[0].friend_display_name or home_friends[0].friend_email or "?")[0] | upper }}</div>
+              {% else %}
+              <svg class="chat-avatar-svg" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path d="M5 21C5 17.134 8.13401 14 12 14C15.866 14 19 17.134 19 21M16 7C16 9.20914 14.2091 11 12 11C9.79086 11 8 9.20914 8 7C8 4.79086 9.79086 3 12 3C14.2091 3 16 4.79086 16 7Z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+              {% endif %}
+            </div>
+            <div class="chat-head-title-wrap">
+              <span class="chat-head-title" id="chat-active-title">
+                {% if home_friends %}{{ home_friends[0].friend_display_name or (home_friends[0].friend_email.split('@')[0] if home_friends[0].friend_email else 'Friend') }}{% else %}Private.chat{% endif %}
+              </span>
+              <span class="chat-head-sub" id="chat-active-sub">
+                {% if home_friends %}{{ home_friends[0].friend_email or 'End-to-End Encrypted' }}{% else %}End-to-End Encrypted{% endif %}
+              </span>
+            </div>
+          </div>
+
+          <div class="chat-head-actions">
+            {% if home_friends and home_friends|length > 1 %}
+            <div class="chat-head-friend-dropdown" onclick="event.stopPropagation();">
+              <select id="chat-friend-selector" onchange="onFriendDropdownChange(this)" class="chat-friend-select-pill">
+                {% for f in home_friends %}
+                {% set fname = f.friend_display_name or (f.friend_email.split('@')[0] if f.friend_email else 'Friend') %}
+                {% set femail = f.friend_email or '' %}
+                <option value="{{ f.friend_google_id or f.friend_email }}" 
+                        data-name="{{ fname }}" 
+                        data-email="{{ femail }}"
+                        data-initial="{{ (fname or femail or '?')[0] | upper }}"
+                        {% if loop.first %}selected{% endif %}>
+                  👤 {{ fname }}
+                </option>
+                {% endfor %}
+              </select>
+            </div>
+            {% endif %}
+            <button class="chat-head-btn" onclick="inviteLinkPrompt()" title="Invite Link">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
+                <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
+              </svg>
+              <span>Invite</span>
+            </button>
+            <button class="chat-head-btn chat-head-icon-btn" onclick="toggleDetailsDrawer()" title="View Chat Info">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16">
+                <circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/>
+              </svg>
+            </button>
+          </div>
+        </div>
+
+        <!-- Chat Feed -->
+        <div class="chat-feed" id="chat-feed-box">
+          <div class="e2ee-banner">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="14" height="14">
+              <rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/>
+            </svg>
+            <span>Messages and media in this chat are end-to-end encrypted. Only participants can read or view them. Not even the server can.</span>
+          </div>
+          <div class="left-message-box">
+            <div class="username">Private.chat</div>
+            <div class="message">🔒 Welcome to Private.chat! Send end-to-end encrypted messages, animated stickers, GIFs, or create polls below.</div>
+            <div class="msg-footer">
+              <span class="timestamp">Now</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Typing indicator (strictly real only, hidden by default) -->
+        <div class="chat-typing-row hidden" id="chat-typing-indicator" style="display:none;">
+          <span id="chat-typing-text"></span>
+          <div class="chat-typing-dots">
+            <span></span><span></span><span></span>
+          </div>
+        </div>
+
+        <!-- ── Dedicated GIF Search Panel ── -->
+        <div class="chat-gif-popover hidden" id="chat-gif-popover">
+          <div class="chat-gif-header">
+            <div class="chat-gif-header-title">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="15" height="15"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
+              <span>Search GIFs</span>
+            </div>
+            <button type="button" class="chat-gif-header-close" onclick="closeGifPanel()" title="Close">&times;</button>
+          </div>
+          <div class="chat-gif-search-wrap">
+            <input type="text" id="gif-search-input" class="chat-gif-search-input" placeholder="Search animated GIFs…" oninput="filterGifs(this.value)">
+            <span class="chat-gif-search-icon">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13">
+                <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+              </svg>
+            </span>
+          </div>
+          <div class="chat-gif-chips">
+            <span class="chat-gif-chip active" onclick="filterGifsTag('', this)">All</span>
+            <span class="chat-gif-chip" onclick="filterGifsTag('happy celebrate', this)">Happy</span>
+            <span class="chat-gif-chip" onclick="filterGifsTag('laugh lol', this)">Laugh</span>
+            <span class="chat-gif-chip" onclick="filterGifsTag('thumbs up cool', this)">Thumbs Up</span>
+            <span class="chat-gif-chip" onclick="filterGifsTag('dance party', this)">Dance</span>
+            <span class="chat-gif-chip" onclick="filterGifsTag('wow mind blown', this)">Wow</span>
+            <span class="chat-gif-chip" onclick="filterGifsTag('love heart', this)">Love</span>
+            <span class="chat-gif-chip" onclick="filterGifsTag('fire lit', this)">Fire</span>
+          </div>
+          <div class="chat-gif-grid" id="gif-results-grid">
+            <div class="chat-gif-item" data-tag="happy cheer celebrate" onclick="sendGif('https://media.giphy.com/media/artj92V8o75VPL7AeQ/giphy.gif')">
+              <img src="https://media.giphy.com/media/artj92V8o75VPL7AeQ/giphy.gif" alt="celebrate" loading="lazy">
+            </div>
+            <div class="chat-gif-item" data-tag="thumbs up yes cool" onclick="sendGif('https://media.giphy.com/media/111ebonMs90YLu/giphy.gif')">
+              <img src="https://media.giphy.com/media/111ebonMs90YLu/giphy.gif" alt="thumbs up" loading="lazy">
+            </div>
+            <div class="chat-gif-item" data-tag="dance party vibe" onclick="sendGif('https://media.giphy.com/media/blSTtZehjAZ8I/giphy.gif')">
+              <img src="https://media.giphy.com/media/blSTtZehjAZ8I/giphy.gif" alt="dance" loading="lazy">
+            </div>
+            <div class="chat-gif-item" data-tag="laugh lol funny" onclick="sendGif('https://media.giphy.com/media/B0vFTrb0ZGDf2/giphy.gif')">
+              <img src="https://media.giphy.com/media/B0vFTrb0ZGDf2/giphy.gif" alt="laugh" loading="lazy">
+            </div>
+            <div class="chat-gif-item" data-tag="wave hello hi" onclick="sendGif('https://media.giphy.com/media/Nx0rz3jtxt969CBKs3/giphy.gif')">
+              <img src="https://media.giphy.com/media/Nx0rz3jtxt969CBKs3/giphy.gif" alt="wave" loading="lazy">
+            </div>
+            <div class="chat-gif-item" data-tag="wow mind blown omg" onclick="sendGif('https://media.giphy.com/media/26ufdipQqU2lhNA4g/giphy.gif')">
+              <img src="https://media.giphy.com/media/26ufdipQqU2lhNA4g/giphy.gif" alt="wow" loading="lazy">
+            </div>
+            <div class="chat-gif-item" data-tag="love heart cute romantic" onclick="sendGif('https://media.giphy.com/media/26BRv0ThflsHCqDrG/giphy.gif')">
+              <img src="https://media.giphy.com/media/26BRv0ThflsHCqDrG/giphy.gif" alt="love" loading="lazy">
+            </div>
+            <div class="chat-gif-item" data-tag="fire lit awesome epic" onclick="sendGif('https://media.giphy.com/media/nrXif9YExO9EI/giphy.gif')">
+              <img src="https://media.giphy.com/media/nrXif9YExO9EI/giphy.gif" alt="fire" loading="lazy">
+            </div>
+            <div class="chat-gif-item" data-tag="clapping applause bravo yes" onclick="sendGif('https://media.giphy.com/media/7rj2ZgttvgomY/giphy.gif')">
+              <img src="https://media.giphy.com/media/7rj2ZgttvgomY/giphy.gif" alt="clapping" loading="lazy">
+            </div>
+          </div>
+        </div>
+
+        <!-- Chat Input Bar -->
+        <div class="chat-input-container">
+          <!-- Reply Bar -->
+          <div id="dm-reply-bar" class="reply-bar hidden">
+            <div class="reply-bar-stripe"></div>
+            <div class="reply-bar-body">
+              <span class="reply-bar-name" id="dm-reply-bar-name"></span>
+              <span class="reply-bar-text" id="dm-reply-bar-text"></span>
+            </div>
+            <button type="button" id="dm-reply-cancel-btn" class="reply-cancel-btn" onclick="cancelDmReply()" title="Cancel Reply">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" width="16" height="16">
+                <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+              </svg>
+            </button>
+          </div>
+
+          <input type="file" id="chat-native-file-picker" accept="image/gif,image/*" style="display:none;" onchange="handleNativeFilePicked(this)">
+          <form id="chat-msg-form" onsubmit="handleSendSubmit(event)" class="chat-input-pill">
+            <button type="button" class="chat-input-tool-btn chat-gif-icon-btn" onclick="toggleGifPanel()" title="Search GIFs">
+              GIF
+            </button>
+            <button type="button" class="chat-input-tool-btn" onclick="document.getElementById('chat-native-file-picker').click()" title="Attach Local GIF / Image">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/>
+              </svg>
+            </button>
+            <input type="text" id="chat-text-input" class="chat-input-field" placeholder="Type a message or paste screenshot…" autocomplete="off" oninput="handleLocalTyping()">
+            <button type="button" class="chat-input-tool-btn" onclick="triggerCreatePoll()" title="Create Poll">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="3" y="3" width="18" height="18" rx="2"/><path d="M7 16V12M12 16V8M17 16V14"/>
+              </svg>
+            </button>
+            <button type="button" id="dm-mic-btn" class="chat-input-tool-btn" title="Hold/Click to record voice" onclick="toggleDmVoiceRecording()">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
+                <path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/>
+                <line x1="8" y1="23" x2="16" y2="23"/>
+              </svg>
+            </button>
+            <button type="submit" id="dm-send-btn" class="chat-send-btn" title="Send">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/>
+              </svg>
+            </button>
+          </form>
         </div>
       </div>
+      <audio id="notifySound" src="{{ url_for('static', filename='sounds/notify.mp3') }}"></audio>
 
-      <form method="POST" action="/account/friends/add" class="home-add-friend-form">
-        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-        <input type="email" name="friend_email" placeholder="Friend's Google email" required>
-        <button type="submit" class="home-window-action home-add-friend-btn" title="Send friend request">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><line x1="19" y1="8" x2="19" y2="14"/><line x1="22" y1="11" x2="16" y2="11"/>
-          </svg>
-        </button>
-      </form>
-
-      <div class="fr-tabs">
-        <button class="fr-tab active" data-hometab="received" type="button">
-          Received {% if pending_requests %}<span class="fr-tab-count">{{ pending_requests | length }}</span>{% endif %}
-        </button>
-        <button class="fr-tab" data-hometab="pending" type="button">
-          Pending {% if outgoing_requests %}<span class="fr-tab-count">{{ outgoing_requests | length }}</span>{% endif %}
-        </button>
-      </div>
-
-      <div class="home-window-body" id="home-fr-received">
-        {% if pending_requests %}
-          {% for req in pending_requests %}
-          <div class="fr-item" data-request-id="{{ req.id }}">
-            <div class="home-item-icon">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><line x1="19" y1="8" x2="19" y2="14"/><line x1="22" y1="11" x2="16" y2="11"/></svg>
-            </div>
-            <div class="home-item-body" style="flex:1;">
-              <div class="home-item-title">{{ req.sender_email or "Unknown" }}</div>
-              <div class="home-item-sub">wants to be your friend</div>
-            </div>
-            <div class="fr-actions">
-              <button class="fr-btn fr-accept" type="button">Accept</button>
-              <button class="fr-btn fr-decline" type="button">Decline</button>
-            </div>
-          </div>
-          {% endfor %}
-        {% else %}
-        <p class="home-empty">No pending friend requests.</p>
-        {% endif %}
-      </div>
-      <div class="home-window-body" id="home-fr-pending" hidden>
-        {% if outgoing_requests %}
-          {% for req in outgoing_requests %}
-          <div class="fr-item" data-request-id="{{ req.id }}">
-            <div class="home-item-icon">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
-            </div>
-            <div class="home-item-body" style="flex:1;">
-              <div class="home-item-title">{{ req.recipient_email or "Unknown" }}</div>
-              <div class="home-item-sub">Waiting for them to accept</div>
-            </div>
-            <div class="fr-actions">
-              <button class="fr-btn fr-decline fr-cancel" type="button">Cancel</button>
-            </div>
-          </div>
-          {% endfor %}
-        {% else %}
-        <p class="home-empty">No pending sent requests.</p>
-        {% endif %}
-      </div>
-    </div>
-
-    <div class="home-window" id="friends-window">
-      <div class="home-window-head">
-        <div class="home-window-title">
-          <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>
-          </svg>
-          <span>Friends</span>
+      <!-- ── 4. Right Details Drawer (Closed by Default) ── -->
+      <div class="chat-info-panel" id="chat-info-panel">
+        <div class="chat-info-panel-top-bar">
+          <span class="chat-info-panel-heading">Chat Details</span>
+          <button class="chat-info-close-btn" onclick="toggleDetailsDrawer()" title="Close Details">&times;</button>
         </div>
-        <a href="/account" class="home-window-action">Manage</a>
-      </div>
-      <div class="home-window-body">
-        {% if home_friends %}
-          {% for f in home_friends %}
-          <div class="home-item">
-            <div class="home-item-icon friend-avatar">{{ (f.friend_email or "?")[0] | upper }}</div>
-            <div class="home-item-body">
-              <div class="home-item-title">{{ f.friend_email or f.friend_google_id }}</div>
-              <div class="home-item-sub">Linked</div>
+
+        <div class="chat-info-head">
+          <div class="chat-info-big-avatar" id="chat-info-avatar">
+            <svg class="chat-avatar-svg" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <path d="M5 21C5 17.134 8.13401 14 12 14C15.866 14 19 17.134 19 21M16 7C16 9.20914 14.2091 11 12 11C9.79086 11 8 9.20914 8 7C8 4.79086 9.79086 3 12 3C14.2091 3 16 4.79086 16 7Z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+          </div>
+          <div class="chat-info-name" id="chat-info-title">
+            {% if home_friends %}{{ home_friends[0].friend_display_name or (home_friends[0].friend_email.split('@')[0] if home_friends[0].friend_email else 'Friend') }}{% else %}Private.chat{% endif %}
+          </div>
+          <div class="chat-info-meta" id="chat-info-sub">
+            {% if home_friends %}{{ home_friends[0].friend_email or 'Direct Chat' }}{% else %}Direct Chat{% endif %}
+          </div>
+        </div>
+
+        <div class="chat-info-call-actions">
+          <button class="chat-info-call-btn" onclick="alert('Voice calling…')">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+            </svg>
+            Voice chat
+          </button>
+          <button class="chat-info-call-btn" onclick="alert('Video calling…')">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/>
+            </svg>
+            Video chat
+          </button>
+        </div>
+
+        <div class="chat-info-menu-list">
+          <div class="chat-info-menu-item" onclick="document.getElementById('chat-search-box').focus(); toggleDetailsDrawer();">
+            <div class="chat-info-menu-item-left">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+              <span>Search in Conversation</span>
             </div>
           </div>
-          {% endfor %}
-        {% else %}
-        <p class="home-empty">No friends added yet. <a href="/account">Add one →</a></p>
-        {% endif %}
+          <div class="chat-info-menu-item" onclick="toggleTheme()">
+            <div class="chat-info-menu-item-left">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="5"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg>
+              <span>Change Theme / Color</span>
+            </div>
+          </div>
+          <div class="chat-info-menu-item" onclick="toggleGifPanel(); toggleDetailsDrawer();">
+            <div class="chat-info-menu-item-left">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
+              <span>Search GIFs</span>
+            </div>
+          </div>
+          <div class="chat-info-menu-item" onclick="inviteLinkPrompt()">
+            <div class="chat-info-menu-item-left">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
+              <span>Share Invite Link</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="chat-info-media-section">
+          <div class="chat-info-media-title">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
+              <rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/>
+            </svg>
+            <span>Shared Media</span>
+          </div>
+          <div class="chat-info-media-grid">
+            <div class="chat-info-media-thumb"><img src="https://picsum.photos/seed/chat1/100/100" alt="media" loading="lazy"></div>
+            <div class="chat-info-media-thumb"><img src="https://picsum.photos/seed/chat2/100/100" alt="media" loading="lazy"></div>
+            <div class="chat-info-media-thumb"><img src="https://picsum.photos/seed/chat3/100/100" alt="media" loading="lazy"></div>
+            <div class="chat-info-media-thumb"><img src="https://picsum.photos/seed/chat4/100/100" alt="media" loading="lazy"></div>
+          </div>
+        </div>
+
       </div>
+
     </div>
   </div>
-  {% endif %}
   {% endblock %}
 
   <script>
-    // Generic wiring for a friend-request tab group (used for both the nav dialog and
-    // the home-page window). scope: a container element; tabSelector/bodySelectors let
-    // each instance use its own data-attribute + element ids without colliding.
+    // Generic wiring for friend requests
     function wireFriendRequestGroup(opts) {
       const { tabs, receivedBody, pendingBody, tabAttr, bellBadgeId } = opts;
       if (!tabs.length || !receivedBody || !pendingBody) return;
@@ -420,11 +669,17 @@
 
     (function() {
       const bell = document.getElementById("friend-req-bell");
+      const railBell = document.getElementById("rail-notif-btn");
       const backdrop = document.getElementById("fr-dialog-backdrop");
       const closeBtn = document.getElementById("fr-dialog-close");
-      if (bell && backdrop) {
-        bell.addEventListener("click", () => backdrop.classList.add("open"));
-        closeBtn.addEventListener("click", () => backdrop.classList.remove("open"));
+
+      function openModal() {
+        if (backdrop) backdrop.classList.add("open");
+      }
+      if (bell) bell.addEventListener("click", openModal);
+      if (railBell) railBell.addEventListener("click", openModal);
+      if (closeBtn) closeBtn.addEventListener("click", () => backdrop.classList.remove("open"));
+      if (backdrop) {
         backdrop.addEventListener("click", (e) => {
           if (e.target === backdrop) backdrop.classList.remove("open");
         });
@@ -437,16 +692,992 @@
         tabAttr: "data-tab",
         bellBadgeId: "friend-req-badge",
       });
-
-      wireFriendRequestGroup({
-        tabs: document.querySelectorAll('#notif-window .fr-tab[data-hometab]'),
-        receivedBody: document.getElementById("home-fr-received"),
-        pendingBody: document.getElementById("home-fr-pending"),
-        tabAttr: "data-hometab",
-        bellBadgeId: "friend-req-badge",
-      });
     })();
+
+    // ── Chat Dashboard Interactive Functionality ──
+    const DEFAULT_USER_AVATAR_SVG = `<svg class="chat-avatar-svg" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M5 21C5 17.134 8.13401 14 12 14C15.866 14 19 17.134 19 21M16 7C16 9.20914 14.2091 11 12 11C9.79086 11 8 9.20914 8 7C8 4.79086 9.79086 3 12 3C14.2091 3 16 4.79086 16 7Z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+    const MY_GOOGLE_ID = {{ google_id | tojson }};
+    const MY_USERNAME = {{ username | tojson }};
+    const socketio = (typeof io !== "undefined") ? io({
+      transports: ["polling", "websocket"],
+      reconnection: true,
+      reconnectionAttempts: Infinity,
+      reconnectionDelay: 500,
+      reconnectionDelayMax: 2000,
+      timeout: 10000
+    }) : null;
+
+    let currentActiveFriendGid = null;
+    let currentActiveFriendName = null;
+    const dmHistoryMap = {};
+    const sentMessageIds = new Set();
+
+    // ── WebCrypto AES-GCM 256 E2EE for Friend Direct Chats ──
+    const dmKeysCache = {};
+
+    async function getOrCreateDmKey(myGid, friendGid) {
+      if (!myGid || !friendGid) return null;
+      const sorted = [String(myGid), String(friendGid)].sort();
+      const cacheKey = sorted.join(":");
+      if (dmKeysCache[cacheKey]) return dmKeysCache[cacheKey];
+
+      const enc = new TextEncoder();
+      const baseKey = await crypto.subtle.importKey(
+        "raw",
+        enc.encode("privatechat-dm-shared-" + sorted[0] + ":" + sorted[1]),
+        "PBKDF2",
+        false,
+        ["deriveKey"]
+      );
+
+      const derived = await crypto.subtle.deriveKey(
+        {
+          name: "PBKDF2",
+          salt: enc.encode("privatechat-salt-dm-" + sorted[0] + "-" + sorted[1]),
+          iterations: 150000,
+          hash: "SHA-256"
+        },
+        baseKey,
+        { name: "AES-GCM", length: 256 },
+        false,
+        ["encrypt", "decrypt"]
+      );
+
+      dmKeysCache[cacheKey] = derived;
+      return derived;
+    }
+
+    // ── WebCrypto AES-GCM 256 E2EE for Friend Direct Chats ──
+    const dmKeysCache = {};
+
+    async function getOrCreateDmKey(myGid, friendGid) {
+      if (!myGid || !friendGid) return null;
+      const sorted = [String(myGid), String(friendGid)].sort();
+      const cacheKey = sorted.join(":");
+      if (dmKeysCache[cacheKey]) return dmKeysCache[cacheKey];
+
+      const enc = new TextEncoder();
+      const baseKey = await crypto.subtle.importKey(
+        "raw",
+        enc.encode("privatechat-dm-shared-" + sorted[0] + ":" + sorted[1]),
+        "PBKDF2",
+        false,
+        ["deriveKey"]
+      );
+
+      const derived = await crypto.subtle.deriveKey(
+        {
+          name: "PBKDF2",
+          salt: enc.encode("privatechat-salt-dm-" + sorted[0] + "-" + sorted[1]),
+          iterations: 150000,
+          hash: "SHA-256"
+        },
+        baseKey,
+        { name: "AES-GCM", length: 256 },
+        false,
+        ["encrypt", "decrypt"]
+      );
+
+      dmKeysCache[cacheKey] = derived;
+      return derived;
+    }
+
+    function bufToB64(buf) { return btoa(String.fromCharCode(...new Uint8Array(buf))); }
+    function b64ToBuf(b64) { return Uint8Array.from(atob(b64), c => c.charCodeAt(0)); }
+
+    async function encryptDmText(myGid, friendGid, plaintext) {
+      const key = await getOrCreateDmKey(myGid, friendGid);
+      if (!key) return plaintext;
+      const iv = crypto.getRandomValues(new Uint8Array(12));
+      const ct = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, new TextEncoder().encode(plaintext));
+      return bufToB64(iv) + ":" + bufToB64(ct);
+    }
+
+    async function decryptDmText(myGid, friendGid, payload) {
+      if (typeof payload !== "string" || !payload.includes(":")) return payload;
+      try {
+        const key = await getOrCreateDmKey(myGid, friendGid);
+        if (!key) return payload;
+        const [ivB64, ctB64] = payload.split(":");
+        const pt = await crypto.subtle.decrypt({ name: "AES-GCM", iv: b64ToBuf(ivB64) }, key, b64ToBuf(ctB64));
+        return new TextDecoder().decode(pt);
+      } catch (e) {
+        return payload;
+      }
+    }
+
+    async function encryptDmBytes(myGid, friendGid, bytes) {
+      const key = await getOrCreateDmKey(myGid, friendGid);
+      if (!key) return null;
+      const iv = crypto.getRandomValues(new Uint8Array(12));
+      const ct = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, bytes);
+      return bufToB64(iv) + ":" + bufToB64(ct);
+    }
+
+    async function decryptDmBytes(myGid, friendGid, payload) {
+      if (typeof payload !== "string" || !payload.includes(":")) return null;
+      try {
+        const key = await getOrCreateDmKey(myGid, friendGid);
+        if (!key) return null;
+        const [ivB64, ctB64] = payload.split(":");
+        const pt = await crypto.subtle.decrypt({ name: "AES-GCM", iv: b64ToBuf(ivB64) }, key, b64ToBuf(ctB64));
+        return new Uint8Array(pt);
+      } catch (e) {
+        return null;
+      }
+    }
+
+    // Clear any previous local database to guarantee no local plaintext storage
+    try {
+      if (window.indexedDB) {
+        indexedDB.deleteDatabase("PrivateChat_DirectDB");
+      }
+    } catch (_) {}
+
+    // ── Reply-To State ──
+    let activeDmReply = null;
+    function setDmReplyTo(data) {
+      activeDmReply = data;
+      const bar = document.getElementById("dm-reply-bar");
+      const nameEl = document.getElementById("dm-reply-bar-name");
+      const textEl = document.getElementById("dm-reply-bar-text");
+      if (bar && nameEl && textEl) {
+        nameEl.textContent = data.name || "Friend";
+        textEl.textContent = (data.message || "").length > 70 ? (data.message || "").slice(0, 70) + "…" : (data.message || "");
+        bar.classList.remove("hidden");
+      }
+      const inp = document.getElementById("chat-text-input");
+      if (inp) inp.focus();
+    }
+
+    function cancelDmReply() {
+      activeDmReply = null;
+      const bar = document.getElementById("dm-reply-bar");
+      if (bar) bar.classList.add("hidden");
+    }
+
+    function playNotificationSound() {
+      try {
+        const snd = document.getElementById("notifySound");
+        if (snd) { snd.pause(); snd.currentTime = 0; snd.play().catch(() => {}); }
+      } catch (_) {}
+    }
+
+    const renderedMessageIds = new Set();
+
+    async function loadDmHistory(friendGid) {
+      if (!friendGid) return;
+      const feed = document.getElementById("chat-feed-box");
+      if (!feed) return;
+
+      // Fetch encrypted messages strictly from Supabase via backend API
+      try {
+        const res = await fetch(`/api/dm/${encodeURIComponent(friendGid)}/messages`);
+        if (res.ok) {
+          const data = await res.json();
+          if (data.ok && Array.isArray(data.messages)) {
+            if (currentActiveFriendGid === friendGid) {
+              for (const m of data.messages) {
+                let text = m.ciphertext;
+                let audioBlobUrl = null;
+                try {
+                  if (m.type === "voice") {
+                    const bytes = await decryptDmBytes(MY_GOOGLE_ID, friendGid, m.ciphertext);
+                    if (bytes) {
+                      const blob = new Blob([bytes], { type: m.mime || "audio/webm" });
+                      audioBlobUrl = URL.createObjectURL(blob);
+                    }
+                  } else {
+                    text = await decryptDmText(MY_GOOGLE_ID, friendGid, m.ciphertext);
+                    if (m.type === "poll") {
+                      try { text = JSON.parse(text); } catch (_) {}
+                    }
+                  }
+                } catch (_) {}
+
+                const isOutgoing = m.sender_google_id === MY_GOOGLE_ID;
+                const senderLabel = isOutgoing ? "You" : (m.sender_name || "Friend");
+                const timeStr = m.created_at ? new Date(m.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : getTimeString();
+                const contentVal = audioBlobUrl || text;
+
+                renderMessageToFeed(senderLabel, contentVal, isOutgoing, m.type || "text", timeStr, m.id, m.reply_to);
+              }
+            }
+          }
+        }
+      } catch (err) {
+        console.error("Failed to load DM history from Supabase:", err);
+      }
+    }
+
+    function switchActiveFriend(friendGid, friendName, friendEmail, initialChar) {
+      currentActiveFriendGid = friendGid;
+      currentActiveFriendName = friendName;
+
+      const titleEl = document.getElementById("chat-active-title");
+      const subEl = document.getElementById("chat-active-sub");
+      const infoTitleEl = document.getElementById("chat-info-title");
+      const infoSubEl = document.getElementById("chat-info-sub");
+      const activeAvatar = document.getElementById("chat-active-avatar");
+      const bigAvatar = document.getElementById("chat-info-avatar");
+
+      if (titleEl) titleEl.textContent = friendName;
+      if (subEl) subEl.textContent = friendEmail || "End-to-End Encrypted";
+      if (infoTitleEl) infoTitleEl.textContent = friendName;
+      if (infoSubEl) infoSubEl.textContent = friendEmail || "Direct Chat";
+
+      const initChar = (initialChar || friendName || friendEmail || "?")[0].toUpperCase();
+      if (activeAvatar) {
+        activeAvatar.innerHTML = `<div class="chat-avatar-initial">${initChar}</div>`;
+      }
+      if (bigAvatar) {
+        bigAvatar.innerHTML = `<div class="chat-avatar-initial" style="width:100%;height:100%;font-size:32px;border-radius:50%;display:flex;align-items:center;justify-content:center;">${initChar}</div>`;
+      }
+
+      // Join direct messaging room via Socket.IO
+      if (socketio && MY_GOOGLE_ID && friendGid) {
+        socketio.emit("join_dm", { friend_gid: friendGid });
+      }
+
+      // Clear feed & load message history
+      const feed = document.getElementById("chat-feed-box");
+      if (feed) {
+        feed.innerHTML = `
+          <div class="e2ee-banner">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="14" height="14">
+              <rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/>
+            </svg>
+            <span>Messages in this chat are end-to-end encrypted. Only you and ${escapeHtml(friendName)} can read them. Not even the server can.</span>
+          </div>`;
+      }
+      cancelDmReply();
+      renderedMessageIds.clear();
+      loadDmHistory(friendGid);
+    }
+
+    function onSidebarContactClick(itemEl) {
+      if (!itemEl) return;
+      document.querySelectorAll(".sidebar-contact-item").forEach(el => el.classList.remove("active"));
+      itemEl.classList.add("active");
+
+      const gid = itemEl.getAttribute("data-friend-gid");
+      const name = itemEl.getAttribute("data-chat-name") || "Friend";
+      const email = itemEl.getAttribute("data-friend-email") || "";
+      const init = itemEl.getAttribute("data-initial") || (name || "?")[0];
+
+      const sel = document.getElementById("chat-friend-selector");
+      if (sel) {
+        sel.value = gid;
+      }
+
+      switchActiveFriend(gid, name, email, init);
+    }
+
+    function filterContactList(q) {
+      const lower = (q || "").toLowerCase().trim();
+      const items = document.querySelectorAll("#sidebar-contacts-list .sidebar-contact-item");
+      items.forEach(it => {
+        const name = (it.getAttribute("data-chat-name") || "").toLowerCase();
+        const email = (it.getAttribute("data-friend-email") || "").toLowerCase();
+        it.style.display = !lower || name.includes(lower) || email.includes(lower) ? "flex" : "none";
+      });
+    }
+
+    function onFriendDropdownChange(selectEl) {
+      if (!selectEl) return;
+      const opt = selectEl.options[selectEl.selectedIndex];
+      if (!opt) return;
+      const gid = opt.value;
+      const name = opt.getAttribute("data-name") || "Friend";
+      const email = opt.getAttribute("data-email") || "";
+      const init = opt.getAttribute("data-initial") || "";
+
+      // Sync active sidebar contact item
+      const item = document.querySelector(`.sidebar-contact-item[data-friend-gid="${gid}"]`);
+      if (item) {
+        document.querySelectorAll(".sidebar-contact-item").forEach(el => el.classList.remove("active"));
+        item.classList.add("active");
+      }
+
+      switchActiveFriend(gid, name, email, init);
+    }
+
+    function toggleDetailsDrawer() {
+      const panel = document.getElementById("chat-info-panel");
+      if (panel) panel.classList.toggle("open-drawer");
+    }
+
+    function inviteLinkPrompt() {
+      const url = window.location.origin + "/join";
+      navigator.clipboard.writeText(url).then(() => {
+        alert("Invite link copied to clipboard: " + url);
+      }).catch(() => {
+        prompt("Copy room invite link:", url);
+      });
+    }
+
+    function getTimeString() {
+      const d = new Date();
+      return d.getHours().toString().padStart(2, '0') + ':' + d.getMinutes().toString().padStart(2, '0');
+    }
+
+    function isGifOrImageUrl(str) {
+      if (typeof str !== "string") return false;
+      const t = str.trim();
+      return /^https?:\/\/.+\.(gif|webp|png|jpe?g)(\?.*)?$/i.test(t) || 
+             /^data:image\/(png|jpeg|webp|gif);base64,/i.test(t) ||
+             /^https?:\/\/(media\d*\.giphy\.com|c\.tenor\.com|i\.imgur\.com)\/.+$/i.test(t);
+    }
+
+    function tickHtml(mid) {
+      return `<span class="msg-ticks" style="color:#53bdeb;margin-left:4px;display:inline-flex;align-items:center;" title="Delivered & Encrypted">
+        <svg viewBox="0 0 16 11" width="14" height="10" fill="none" stroke="currentColor" stroke-width="1.4">
+          <path d="M1 5.5 4.5 9 11 1.5"/><path d="M5.5 5.5 9 9 15.5 1.5"/>
+        </svg>
+      </span>`;
+    }
+
+    function renderMessageToFeed(sender, content, isOutgoing = true, type = "text", timestamp = null, msgId = null, replyData = null) {
+      if (msgId) {
+        if (renderedMessageIds.has(msgId)) return;
+        renderedMessageIds.add(msgId);
+      }
+
+      const feed = document.getElementById("chat-feed-box");
+      if (!feed) return;
+
+      const div = document.createElement("div");
+      div.className = isOutgoing ? "right-message-box" : "left-message-box";
+      if (msgId) div.dataset.mid = msgId;
+
+      let replyHtml = "";
+      if (replyData && replyData.message) {
+        replyHtml = `
+          <div class="reply-quote">
+            <div class="reply-quote-name">${escapeHtml(replyData.name || "Friend")}</div>
+            <div class="reply-quote-text">${escapeHtml(replyData.message)}</div>
+          </div>`;
+      }
+
+      let bodyHtml = "";
+      if (type === "voice") {
+        bodyHtml = `
+          <div class="voice-player" style="display:flex;align-items:center;gap:8px;padding:4px 0;">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" width="16" height="16" style="flex-shrink:0;opacity:.75">
+              <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
+              <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+            </svg>
+            <audio controls src="${content}" preload="metadata" style="height:32px;max-width:220px;"></audio>
+          </div>`;
+      } else if (type === "gif" || (type === "text" && isGifOrImageUrl(content)) || type === "image") {
+        bodyHtml = `<div class="chat-msg-media" style="margin:4px 0;"><img src="${escapeHtml(content)}" alt="Media" style="max-width:100%;max-height:260px;border-radius:8px;display:block;" loading="lazy"></div>`;
+      } else if (type === "poll") {
+        const q = typeof content === "object" ? content.question : "Poll";
+        const o1 = typeof content === "object" ? content.opt1 : "Yes";
+        const o2 = typeof content === "object" ? content.opt2 : "No";
+        bodyHtml = `
+          <div class="chat-poll-card" style="margin:4px 0;">
+            <div class="chat-poll-question" style="font-weight:600;margin-bottom:6px;">${escapeHtml(q)}</div>
+            <button type="button" class="chat-poll-option-btn" onclick="votePoll(this, 'opt1')">${escapeHtml(o1)}</button>
+            <button type="button" class="chat-poll-option-btn" onclick="votePoll(this, 'opt2')">${escapeHtml(o2)}</button>
+            <div class="chat-poll-results">
+              <div class="chat-poll-split">
+                <span class="poll-opt1-lbl">${escapeHtml(o1)}: 50%</span>
+                <span class="poll-opt2-lbl">${escapeHtml(o2)}: 50%</span>
+              </div>
+              <div class="chat-poll-progress-bar">
+                <div class="chat-poll-progress-fill" style="width: 50%;"></div>
+              </div>
+            </div>
+          </div>`;
+      } else {
+        bodyHtml = `<div class="message">${escapeHtml(content)}</div>`;
+      }
+
+      const ts = timestamp || getTimeString();
+      div.innerHTML = `
+        ${replyHtml}
+        <div class="username">${escapeHtml(sender)}</div>
+        ${bodyHtml}
+        <div class="msg-footer" style="display:flex;align-items:center;justify-content:flex-end;gap:4px;margin-top:2px;">
+          <span class="timestamp">${escapeHtml(ts)}</span>
+          ${isOutgoing ? tickHtml(msgId) : ""}
+          <button type="button" class="reply-btn" title="Reply to message" style="background:none;border:none;color:inherit;cursor:pointer;padding:0 2px;opacity:0.65;display:inline-flex;align-items:center;">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" width="12" height="12">
+              <polyline points="9 17 4 12 9 7"/><path d="M20 18v-2a4 4 0 0 0-4-4H4"/>
+            </svg>
+          </button>
+        </div>
+      `;
+
+      const plainSnippet = typeof content === "string" ? (content.length > 80 ? content.slice(0, 80) + "…" : content) : (type === "voice" ? "🎤 Voice Note" : "Media");
+      div.querySelector(".reply-btn")?.addEventListener("click", (e) => {
+        e.stopPropagation();
+        setDmReplyTo({ id: msgId, name: sender, message: plainSnippet });
+      });
+
+      feed.appendChild(div);
+      feed.scrollTop = feed.scrollHeight;
+    }
+
+    function appendMessage(sender, content, isOutgoing = true, type = "text", timestamp = null, msgId = null, replyData = null) {
+      renderMessageToFeed(sender, content, isOutgoing, type, timestamp, msgId, replyData);
+    }
+
+    function escapeHtml(str) {
+      if (typeof str !== "string") return "";
+      const div = document.createElement("div");
+      div.textContent = str;
+      return div.innerHTML;
+    }
+
+    // ── Voice Recording in Direct Chats ──
+    const DM_VOICE_BITRATE = 32000;
+    let dmMediaRecorder = null;
+    let dmAudioChunks = [];
+    let isDmRecording = false;
+    let dmRecordTimer = null;
+    let dmRecordStart = 0;
+
+    async function toggleDmVoiceRecording() {
+      if (isDmRecording) {
+        stopDmVoiceRecording();
+      } else {
+        startDmVoiceRecording();
+      }
+    }
+
+    async function startDmVoiceRecording() {
+      if (!currentActiveFriendGid) {
+        alert("Please select a contact to send a voice note.");
+        return;
+      }
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1 } });
+        dmAudioChunks = [];
+        const mime = MediaRecorder.isTypeSupported("audio/webm;codecs=opus") ? "audio/webm;codecs=opus"
+                   : MediaRecorder.isTypeSupported("audio/webm") ? "audio/webm" : "audio/ogg";
+        dmMediaRecorder = new MediaRecorder(stream, { mimeType: mime, audioBitsPerSecond: DM_VOICE_BITRATE });
+        dmMediaRecorder.ondataavailable = e => { if (e.data.size > 0) dmAudioChunks.push(e.data); };
+        dmMediaRecorder.onstop = sendDmVoiceMessage;
+        dmMediaRecorder.start(200);
+        isDmRecording = true;
+        dmRecordStart = Date.now();
+        
+        const micBtn = document.getElementById("dm-mic-btn");
+        if (micBtn) {
+          micBtn.style.color = "#ff3b30";
+          micBtn.style.transform = "scale(1.2)";
+          micBtn.title = "Click to stop and send recording";
+        }
+        dmRecordTimer = setTimeout(stopDmVoiceRecording, 60000); // 60s max
+      } catch (err) {
+        alert("Microphone access denied or not supported.");
+      }
+    }
+
+    function stopDmVoiceRecording() {
+      if (!isDmRecording || !dmMediaRecorder) return;
+      clearTimeout(dmRecordTimer);
+      dmMediaRecorder.stop();
+      dmMediaRecorder.stream.getTracks().forEach(t => t.stop());
+      isDmRecording = false;
+      const micBtn = document.getElementById("dm-mic-btn");
+      if (micBtn) {
+        micBtn.style.color = "";
+        micBtn.style.transform = "";
+        micBtn.title = "Record voice note";
+      }
+    }
+
+    async function sendDmVoiceMessage() {
+      if (!dmAudioChunks.length || !currentActiveFriendGid || !MY_GOOGLE_ID) return;
+      const mime = dmAudioChunks[0]?.type || "audio/webm";
+      const blob = new Blob(dmAudioChunks, { type: mime });
+      const durationSec = Math.round((Date.now() - dmRecordStart) / 1000) || 1;
+      const localUrl = URL.createObjectURL(blob);
+      const mid = "dm-voice-" + Date.now() + "-" + Math.random().toString(36).substr(2, 7);
+      sentMessageIds.add(mid);
+
+      // Render for sender immediately
+      appendMessage("You", localUrl, true, "voice", getTimeString(), mid, activeDmReply);
+
+      const bytes = new Uint8Array(await blob.arrayBuffer());
+      const encrypted = await encryptDmBytes(MY_GOOGLE_ID, currentActiveFriendGid, bytes);
+      if (encrypted && socketio) {
+        socketio.emit("send_dm_message", {
+          id: mid,
+          friend_gid: currentActiveFriendGid,
+          ciphertext: encrypted,
+          type: "voice",
+          mime,
+          duration: durationSec,
+          reply_to: activeDmReply
+        });
+      }
+      cancelDmReply();
+    }
+
+    // ── Clipboard Paste (Ctrl+V) & Drag-and-Drop Image Sharing ──
+    async function sendDirectImageFile(file) {
+      if (!file || !currentActiveFriendGid || !MY_GOOGLE_ID) return;
+      const reader = new FileReader();
+      reader.onload = async (ev) => {
+        const base64Data = ev.target.result;
+        const mid = "dm-img-" + Date.now() + "-" + Math.random().toString(36).substr(2, 7);
+        sentMessageIds.add(mid);
+
+        // Optimistic render
+        appendMessage("You", base64Data, true, "image", getTimeString(), mid, activeDmReply);
+
+        const encrypted = await encryptDmText(MY_GOOGLE_ID, currentActiveFriendGid, base64Data);
+        if (socketio) {
+          socketio.emit("send_dm_message", {
+            id: mid,
+            friend_gid: currentActiveFriendGid,
+            ciphertext: encrypted,
+            type: "image",
+            reply_to: activeDmReply
+          });
+        }
+        cancelDmReply();
+      };
+      reader.readAsDataURL(file);
+    }
+
+    // Window paste handler for screenshots
+    window.addEventListener("paste", (e) => {
+      const items = e.clipboardData && e.clipboardData.items;
+      if (!items) return;
+      for (const item of items) {
+        if (item.type.indexOf("image") !== -1) {
+          const file = item.getAsFile();
+          if (file) {
+            e.preventDefault();
+            sendDirectImageFile(file);
+            break;
+          }
+        }
+      }
+    });
+
+    // Drag and drop handlers
+    const mainChatPane = document.getElementById("chat-main-pane");
+    if (mainChatPane) {
+      ["dragenter", "dragover"].forEach(evt => {
+        mainChatPane.addEventListener(evt, (e) => {
+          e.preventDefault();
+          mainChatPane.classList.add("drag-over");
+        });
+      });
+      ["dragleave", "drop"].forEach(evt => {
+        mainChatPane.addEventListener(evt, (e) => {
+          e.preventDefault();
+          mainChatPane.classList.remove("drag-over");
+        });
+      });
+      mainChatPane.addEventListener("drop", (e) => {
+        const files = e.dataTransfer && e.dataTransfer.files;
+        if (files && files[0] && files[0].type.startsWith("image/")) {
+          sendDirectImageFile(files[0]);
+        }
+      });
+    }
+
+    async function handleSendSubmit(e) {
+      e.preventDefault();
+      const input = document.getElementById("chat-text-input");
+      const text = input.value.trim();
+      if (!text) return;
+
+      const msgType = isGifOrImageUrl(text) ? "gif" : "text";
+      const mid = "dm-" + Date.now() + "-" + Math.random().toString(36).substr(2, 7);
+      sentMessageIds.add(mid);
+
+      const currentReply = activeDmReply ? { ...activeDmReply } : null;
+
+      // Instantly render for the sender
+      appendMessage("You", text, true, msgType, getTimeString(), mid, currentReply);
+
+      if (MY_GOOGLE_ID && currentActiveFriendGid && socketio) {
+        const encrypted = await encryptDmText(MY_GOOGLE_ID, currentActiveFriendGid, text);
+        socketio.emit("send_dm_message", {
+          id: mid,
+          friend_gid: currentActiveFriendGid,
+          ciphertext: encrypted,
+          type: msgType,
+          reply_to: currentReply
+        });
+      }
+
+      input.value = "";
+      cancelDmReply();
+      closeGifPanel();
+    }
+
+    async function handleNativeFilePicked(input) {
+      const file = input.files && input.files[0];
+      if (!file) return;
+      sendDirectImageFile(file);
+      input.value = "";
+    }
+
+    function toggleReaction(pill) {
+      const countEl = pill.querySelector("span");
+      let count = parseInt(countEl.textContent, 10) || 0;
+      if (pill.classList.contains("active")) {
+        pill.classList.remove("active");
+        countEl.textContent = Math.max(1, count - 1);
+      } else {
+        pill.classList.add("active");
+        countEl.textContent = count + 1;
+      }
+    }
+
+    function addCustomReaction(btn) {
+      const row = btn.parentElement;
+      const emoji = prompt("Add reaction emoji (e.g. 🔥, 👍, ❤️, 🚀):", "🔥");
+      if (emoji) {
+        const pill = document.createElement("span");
+        pill.className = "chat-reaction-pill active";
+        pill.onclick = () => toggleReaction(pill);
+        pill.innerHTML = `${emoji} <span>1</span>`;
+        row.insertBefore(pill, btn);
+      }
+    }
+
+    function votePoll(btn, opt) {
+      const card = btn.closest(".chat-poll-card");
+      if (!card) return;
+      const fill = card.querySelector(".chat-poll-progress-fill");
+      const opt1Lbl = card.querySelector(".poll-opt1-lbl");
+      const opt2Lbl = card.querySelector(".poll-opt2-lbl");
+      
+      const pct = opt === 'opt1' ? 65 : 35;
+      if (fill) fill.style.width = pct + "%";
+      if (opt1Lbl) opt1Lbl.textContent = opt1Lbl.textContent.split(":")[0] + ": " + pct + "%";
+      if (opt2Lbl) opt2Lbl.textContent = opt2Lbl.textContent.split(":")[0] + ": " + (100 - pct) + "%";
+
+      card.querySelectorAll(".chat-poll-option-btn").forEach(b => {
+        b.style.borderColor = "";
+        b.style.boxShadow = "";
+      });
+      btn.style.borderColor = "var(--wa-green)";
+      btn.style.boxShadow = "0 0 0 2px var(--wa-green)";
+    }
+
+    async function triggerCreatePoll() {
+      const q = prompt("Enter poll question:", "Are you ready?");
+      if (!q) return;
+      const o1 = prompt("Option 1:", "Yes") || "Yes";
+      const o2 = prompt("Option 2:", "No") || "No";
+      const pollData = JSON.stringify({ question: q, opt1: o1, opt2: o2 });
+      const mid = "dm-" + Date.now() + "-" + Math.random().toString(36).substr(2, 7);
+      sentMessageIds.add(mid);
+
+      appendMessage("You", { question: q, opt1: o1, opt2: o2 }, true, "poll");
+
+      if (MY_GOOGLE_ID && currentActiveFriendGid && socketio) {
+        const encrypted = await encryptDmText(MY_GOOGLE_ID, currentActiveFriendGid, pollData);
+        socketio.emit("send_dm_message", {
+          id: mid,
+          friend_gid: currentActiveFriendGid,
+          ciphertext: encrypted,
+          type: "poll"
+        });
+      }
+    }
+
+    // ── Dedicated GIF Search Panel Functions (Giphy API Backend Proxy) ──
+    let gifSearchDebounce = null;
+    let gifLoadedOnce = false;
+
+    function toggleGifPanel() {
+      const popover = document.getElementById("chat-gif-popover");
+      if (popover) {
+        popover.classList.toggle("hidden");
+        if (!popover.classList.contains("hidden")) {
+          const input = document.getElementById("gif-search-input");
+          if (input) {
+            input.focus();
+            if (!gifLoadedOnce) {
+              filterGifs("");
+              gifLoadedOnce = true;
+            }
+          }
+        }
+      }
+    }
+
+    function closeGifPanel() {
+      const popover = document.getElementById("chat-gif-popover");
+      if (popover) popover.classList.add("hidden");
+    }
+
+    async function filterGifs(q) {
+      clearTimeout(gifSearchDebounce);
+      const grid = document.getElementById("gif-results-grid");
+      if (!grid) return;
+
+      gifSearchDebounce = setTimeout(async () => {
+        try {
+          const res = await fetch(`/api/gifs/search?q=${encodeURIComponent(q || "")}`);
+          if (res.ok) {
+            const data = await res.json();
+            if (data.ok && Array.isArray(data.gifs) && data.gifs.length > 0) {
+              grid.innerHTML = data.gifs.map(g => `
+                <div class="chat-gif-item" onclick="sendGif('${escapeHtml(g.url)}')">
+                  <img src="${escapeHtml(g.preview || g.url)}" alt="${escapeHtml(g.title || 'GIF')}" loading="lazy">
+                </div>
+              `).join("");
+              return;
+            }
+          }
+        } catch (err) {
+          console.debug("GIF API fetch error:", err);
+        }
+
+        // Local tag fallback if offline or request fails
+        const items = grid.querySelectorAll(".chat-gif-item");
+        const lower = (q || "").toLowerCase().trim();
+        items.forEach(it => {
+          const tag = (it.getAttribute("data-tag") || "").toLowerCase();
+          it.style.display = !lower || tag.includes(lower) ? "block" : "none";
+        });
+      }, 250);
+    }
+
+    function filterGifsTag(tag, chipEl) {
+      document.querySelectorAll(".chat-gif-chip").forEach(c => c.classList.remove("active"));
+      if (chipEl) chipEl.classList.add("active");
+      const input = document.getElementById("gif-search-input");
+      if (input) input.value = tag ? tag.split(" ")[0] : "";
+      filterGifs(tag ? tag.split(" ")[0] : "");
+    }
+
+    async function sendGif(url) {
+      if (!url || !currentActiveFriendGid || !MY_GOOGLE_ID) return;
+      const mid = "dm-gif-" + Date.now() + "-" + Math.random().toString(36).substr(2, 7);
+      sentMessageIds.add(mid);
+
+      const currentReply = activeDmReply ? { ...activeDmReply } : null;
+
+      // Render for sender immediately
+      appendMessage("You", url, true, "gif", getTimeString(), mid, currentReply);
+
+      if (socketio) {
+        const encrypted = await encryptDmText(MY_GOOGLE_ID, currentActiveFriendGid, url);
+        socketio.emit("send_dm_message", {
+          id: mid,
+          friend_gid: currentActiveFriendGid,
+          ciphertext: encrypted,
+          type: "gif",
+          reply_to: currentReply
+        });
+      }
+      cancelDmReply();
+      closeGifPanel();
+    }
+
+    // ── Native Clipboard Paste & Drag-and-Drop GIF Support ──
+    document.addEventListener("paste", function(e) {
+      const items = (e.clipboardData || e.originalEvent?.clipboardData)?.items;
+      if (!items) return;
+      for (let i = 0; i < items.length; i++) {
+        if (items[i].type.indexOf("image") !== -1) {
+          const blob = items[i].getAsFile();
+          if (blob) {
+            e.preventDefault();
+            const reader = new FileReader();
+            reader.onload = async function(evt) {
+              const dataUrl = evt.target.result;
+              const mid = "dm-" + Date.now() + "-" + Math.random().toString(36).substr(2, 7);
+              sentMessageIds.add(mid);
+
+              appendMessage("You", dataUrl, true, "gif");
+
+              if (MY_GOOGLE_ID && currentActiveFriendGid && socketio) {
+                const encrypted = await encryptDmText(MY_GOOGLE_ID, currentActiveFriendGid, dataUrl);
+                socketio.emit("send_dm_message", {
+                  id: mid,
+                  friend_gid: currentActiveFriendGid,
+                  ciphertext: encrypted,
+                  type: "gif"
+                });
+              }
+            };
+            reader.readAsDataURL(blob);
+            break;
+          }
+        }
+      }
+    });
+
+    const dropPane = document.getElementById("chat-main-pane");
+    if (dropPane) {
+      ["dragenter", "dragover"].forEach(eventName => {
+        dropPane.addEventListener(eventName, (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          dropPane.classList.add("drag-over");
+        }, false);
+      });
+      ["dragleave", "drop"].forEach(eventName => {
+        dropPane.addEventListener(eventName, (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          dropPane.classList.remove("drag-over");
+        }, false);
+      });
+      dropPane.addEventListener("drop", (e) => {
+        const dt = e.dataTransfer;
+        const files = dt?.files;
+        if (files && files.length > 0) {
+          const file = files[0];
+          if (file.type.startsWith("image/")) {
+            const reader = new FileReader();
+            reader.onload = async function(evt) {
+              const dataUrl = evt.target.result;
+              const mid = "dm-" + Date.now() + "-" + Math.random().toString(36).substr(2, 7);
+              sentMessageIds.add(mid);
+
+              appendMessage("You", dataUrl, true, "gif");
+
+              if (MY_GOOGLE_ID && currentActiveFriendGid && socketio) {
+                const encrypted = await encryptDmText(MY_GOOGLE_ID, currentActiveFriendGid, dataUrl);
+                socketio.emit("send_dm_message", {
+                  id: mid,
+                  friend_gid: currentActiveFriendGid,
+                  ciphertext: encrypted,
+                  type: "gif"
+                });
+              }
+            };
+            reader.readAsDataURL(file);
+          }
+        }
+      });
+    }
+
+    // ── Real-Only Typing Indicator Logic ──
+    const activeTypingUsers = new Set();
+    const typingClearTimers = {};
+
+    function updateTypingDisplay() {
+      const indicator = document.getElementById("chat-typing-indicator");
+      const textEl = document.getElementById("chat-typing-text");
+      if (!indicator || !textEl) return;
+
+      const names = Array.from(activeTypingUsers);
+      if (names.length === 0) {
+        indicator.style.display = "none";
+        indicator.classList.add("hidden");
+        textEl.textContent = "";
+      } else if (names.length === 1) {
+        textEl.textContent = `${names[0]} is typing…`;
+        indicator.style.display = "flex";
+        indicator.classList.remove("hidden");
+      } else {
+        textEl.textContent = `${names.length} people are typing…`;
+        indicator.style.display = "flex";
+        indicator.classList.remove("hidden");
+      }
+    }
+
+    let localTypingTimer = null;
+    function handleLocalTyping() {
+      if (socketio && socketio.connected) {
+        if (currentActiveFriendGid) {
+          socketio.emit("dm_typing", { friend_gid: currentActiveFriendGid, active: true });
+          clearTimeout(localTypingTimer);
+          localTypingTimer = setTimeout(() => {
+            socketio.emit("dm_typing", { friend_gid: currentActiveFriendGid, active: false });
+          }, 2500);
+        }
+      }
+    }
+
+    // ── Socket.IO Real-Time Handlers for Direct Messages ──
+    if (socketio) {
+      socketio.on("connect", () => {
+        const sel = document.getElementById("chat-friend-selector");
+        if (sel) {
+          onFriendDropdownChange(sel);
+        } else if (currentActiveFriendGid) {
+          socketio.emit("join_dm", { friend_gid: currentActiveFriendGid });
+        }
+      });
+
+      socketio.on("dm_message", async (data) => {
+        if (!data || !data.ciphertext) return;
+        if (data.id && sentMessageIds.has(data.id)) return; // Ignore own echo
+        if (data.sender_gid === MY_GOOGLE_ID) return; // Ignore own outgoing broadcast
+
+        const otherGid = data.sender_gid;
+        let plaintext = data.ciphertext;
+        let audioUrl = null;
+
+        try {
+          if (data.type === "voice") {
+            const bytes = await decryptDmBytes(MY_GOOGLE_ID, otherGid, data.ciphertext);
+            if (bytes) {
+              const blob = new Blob([bytes], { type: data.mime || "audio/webm" });
+              audioUrl = URL.createObjectURL(blob);
+            }
+          } else {
+            plaintext = await decryptDmText(MY_GOOGLE_ID, otherGid, data.ciphertext);
+            if (data.type === "poll") {
+              try { plaintext = JSON.parse(plaintext); } catch (_) {}
+            }
+          }
+        } catch (_) {}
+
+        const senderLabel = data.sender_name || "Friend";
+        const contentVal = audioUrl || plaintext;
+
+        // If this message belongs to the open chat, render it immediately
+        if (currentActiveFriendGid === otherGid) {
+          renderMessageToFeed(senderLabel, contentVal, false, data.type || "text", data.timestamp, data.id, data.reply_to);
+          playNotificationSound();
+        }
+      });
+
+      socketio.on("dm_typing", (data) => {
+        if (!data || data.sender_gid !== currentActiveFriendGid) return;
+        const name = data.sender_name || "Friend";
+        if (data.active) {
+          activeTypingUsers.add(name);
+          clearTimeout(typingClearTimers[name]);
+          typingClearTimers[name] = setTimeout(() => {
+            activeTypingUsers.delete(name);
+            updateTypingDisplay();
+          }, 3500);
+        } else {
+          activeTypingUsers.delete(name);
+          clearTimeout(typingClearTimers[name]);
+        }
+        updateTypingDisplay();
+      });
+    }
+
+    // Auto-select first active friend on load
+    document.addEventListener("DOMContentLoaded", function() {
+      const sel = document.getElementById("chat-friend-selector");
+      if (sel) {
+        onFriendDropdownChange(sel);
+      } else {
+        {% if home_friends and home_friends|length > 0 %}
+        switchActiveFriend(
+          {{ (home_friends[0].friend_google_id or home_friends[0].friend_email)|tojson }},
+          {{ (home_friends[0].friend_display_name or home_friends[0].friend_email)|tojson }},
+          {{ (home_friends[0].friend_email or '')|tojson }},
+          {{ ((home_friends[0].friend_display_name or home_friends[0].friend_email or '?')[0]|upper)|tojson }}
+        );
+        {% endif %}
+      }
+    });
   </script>
 
 </body>
 </html>
+

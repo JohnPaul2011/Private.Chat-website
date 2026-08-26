@@ -1,5 +1,16 @@
-from gevent import monkey
-monkey.patch_all()
+import sys, os
+
+# ── Platform Autodetection: 'threading' on Windows, 'gevent' on Linux/Unix ──
+IS_WINDOWS = sys.platform.startswith("win")
+ASYNC_MODE = "threading"
+
+if not IS_WINDOWS:
+    try:
+        from gevent import monkey
+        monkey.patch_all()
+        ASYNC_MODE = "gevent"
+    except ImportError:
+        ASYNC_MODE = "threading"
 
 from flask import render_template, Flask, request, redirect, session, url_for, flash, jsonify, abort
 from flask_socketio import SocketIO, send, join_room, leave_room, emit
@@ -8,24 +19,51 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 from colorama import init as init_color
 from pywebpush import webpush, WebPushException
 from authlib.integrations.flask_client import OAuth
-import time, logging, os, re, hmac, hashlib, secrets, base64, struct, datetime, threading, uuid, json
+import time, logging, re, hmac, hashlib, secrets, base64, struct, datetime, threading, uuid, json
 import requests as _requests
-
-_sysrand = secrets.SystemRandom()
 
 init_color(convert=True, strip=False)
 logging.basicConfig(level=logging.INFO)
+logging.info(f"Platform detected: {'Windows' if IS_WINDOWS else 'Linux/Unix'} -> Socket.IO async_mode='{ASYNC_MODE}'")
 
 app   = Flask(__name__)
 PROXY_HOPS = int(os.environ.get("TRUSTED_PROXY_HOPS", "1"))
 if PROXY_HOPS > 0:
     app.wsgi_app = ProxyFix(app.wsgi_app, x_for=PROXY_HOPS, x_proto=1, x_host=0)
-app.config['SECRET_KEY'] = os.environ.get("SECRET_KEY") or secrets.token_hex(32)
+
+def _load_secret_key():
+    # 1. Environment variable (Render, production dashboard, or .env)
+    env_secret = os.environ.get("SECRET_KEY") or os.environ.get("SESSION_SECRET")
+    if env_secret:
+        return env_secret.strip()
+
+    # 2. Local .session_secret file (for local development session persistence)
+    secret_path = os.path.join(os.path.dirname(__file__), ".session_secret")
+    if os.path.exists(secret_path):
+        try:
+            with open(secret_path, "r", encoding="utf-8") as f:
+                val = f.read().strip()
+                if val:
+                    return val
+        except Exception:
+            pass
+
+    # 3. Fallback: generate and persist locally
+    new_secret = secrets.token_hex(32)
+    try:
+        with open(secret_path, "w", encoding="utf-8") as f:
+            f.write(new_secret)
+    except Exception:
+        pass
+    return new_secret
+
+app.secret_key = _load_secret_key()
+app.config['SECRET_KEY'] = app.secret_key
 app.config['SESSION_COOKIE_HTTPONLY'] = True
 app.config['SESSION_COOKIE_SAMESITE'] = "Lax"
 app.config['SESSION_COOKIE_SECURE'] = os.environ.get("FORCE_HTTPS", "0") == "1"
 app.config['PERMANENT_SESSION_LIFETIME'] = datetime.timedelta(minutes=30)
-socketio = SocketIO(app, async_mode="gevent", logger=False, engineio_logger=False,
+socketio = SocketIO(app, async_mode=ASYNC_MODE, logger=False, engineio_logger=False,
                     ping_timeout=10, ping_interval=8)
 
 BAD_USERNAMES = {"admin","server","system","moderator","host"}
@@ -104,7 +142,7 @@ def supabase_available():
     return bool(SUPABASE_URL and SUPABASE_SERVICE_KEY)
 
 def sb_list_friends(owner_google_id):
-    if not supabase_available(): return []
+    if not supabase_available() or not owner_google_id: return []
     try:
         r = _requests.get(
             f"{SUPABASE_URL}/rest/v1/chat_friends",
@@ -113,7 +151,24 @@ def sb_list_friends(owner_google_id):
             timeout=8,
         )
         r.raise_for_status()
-        return r.json()
+        rows = r.json()
+        for f in rows:
+            if not f.get("friend_google_id") and f.get("friend_email"):
+                fgid = sb_find_user_by_email(f["friend_email"])
+                if fgid:
+                    f["friend_google_id"] = fgid
+            # Resolve actual display name from profile if missing
+            if not f.get("friend_display_name"):
+                if f.get("friend_google_id"):
+                    prof = sb_get_profile(f["friend_google_id"])
+                    if prof and prof.get("display_name"):
+                        f["friend_display_name"] = prof["display_name"]
+            # Fallback formatting for friend display name from email
+            if not f.get("friend_display_name") and f.get("friend_email"):
+                local = f["friend_email"].split("@")[0]
+                cleaned = " ".join(part.capitalize() for part in re.split(r"[._-]", local) if part)
+                f["friend_display_name"] = cleaned or local
+        return rows
     except Exception as e:
         logging.info(f"Supabase list_friends failed: {e}")
         return []
@@ -202,6 +257,8 @@ def sb_create_friend_request(sender_gid, sender_email, recipient_email, recipien
         if r.status_code >= 400:
             if r.status_code == 409 or "duplicate" in r.text.lower():
                 return False, "You already have a pending request to this person."
+            if "schema cache" in r.text.lower() or "could not find the table" in r.text.lower():
+                return False, "Database table 'chat_friend_requests' is not created in Supabase yet. Please run sql/004_friend_requests.sql in Supabase SQL editor."
             return False, r.text[:200]
         return True, None
     except Exception as e:
@@ -420,6 +477,47 @@ def sb_mark_notifications_read(owner_google_id):
         logging.info(f"Supabase mark_notifications_read failed: {e}")
         return False
 
+# ─────────────────────────────── direct messages storage ────────────────────
+def sb_save_direct_message(dm_room, sender_gid, sender_name, recipient_gid, mtype, ciphertext):
+    if not supabase_available(): return False
+    try:
+        r = _requests.post(
+            f"{SUPABASE_URL}/rest/v1/chat_direct_messages",
+            headers=_supabase_headers(),
+            json={
+                "dm_room": dm_room,
+                "sender_google_id": sender_gid,
+                "sender_name": sender_name,
+                "recipient_google_id": recipient_gid,
+                "type": mtype,
+                "ciphertext": ciphertext,
+            },
+            timeout=8,
+        )
+        return r.status_code < 400
+    except Exception as e:
+        logging.info(f"Supabase save_direct_message failed: {e}")
+        return False
+
+def sb_list_direct_messages(dm_room, limit=100):
+    if not supabase_available() or not dm_room: return []
+    try:
+        r = _requests.get(
+            f"{SUPABASE_URL}/rest/v1/chat_direct_messages",
+            headers=_supabase_headers(),
+            params={
+                "dm_room": f"eq.{dm_room}",
+                "order": "created_at.asc",
+                "limit": limit,
+            },
+            timeout=8,
+        )
+        r.raise_for_status()
+        return r.json()
+    except Exception as e:
+        logging.info(f"Supabase list_direct_messages failed: {e}")
+        return []
+
 
 # ─────────────────────────────── helpers ────────────────────────────────────
 NAME_RE = re.compile(r"^[A-Za-z0-9_\-]{1,24}$")
@@ -539,8 +637,10 @@ def index():
         outgoing_requests = sb_list_outgoing_requests(gid)
     return render_template(
         "index.html",
-        username=session.get("name","Guest"),
+        username=session.get("preferred_name") or session.get("name","Guest"),
         google_signed_in=bool(gid),
+        google_id=gid or "",
+        google_email=session.get("google_email",""),
         home_friends=friends,
         home_notifications=notifications,
         pending_requests=pending_requests,
@@ -764,6 +864,51 @@ def api_cancel_friend_request(request_id):
     if not ok:
         return jsonify({"ok": False, "error": "Couldn't cancel request."}), 404
     return jsonify({"ok": True})
+
+@app.route("/api/friends/add", methods=["POST"])
+def api_add_friend():
+    check_csrf()
+    if not session.get("google_id"):
+        return jsonify({"ok": False, "error": "Please sign in with Google first."}), 401
+    gid = session["google_id"]
+    data = request.get_json(silent=True) or request.form
+    email = (data.get("friend_email") or "").strip().lower()
+    if not email or "@" not in email:
+        return jsonify({"ok": False, "error": "Enter a valid Google email address."}), 400
+    if email == (session.get("google_email") or "").lower():
+        return jsonify({"ok": False, "error": "You cannot add yourself."}), 400
+
+    friend_gid = sb_find_user_by_email(email)
+    my_email = session.get("google_email", "")
+    ok, err = sb_create_friend_request(
+        sender_gid=gid,
+        sender_email=my_email,
+        recipient_email=email,
+        recipient_gid=friend_gid,
+    )
+    if ok:
+        if friend_gid:
+            sb_add_notification(
+                friend_gid, "friend_request",
+                "New friend request",
+                f"{my_email or 'Someone'} wants to be your friend.",
+            )
+            send_push(friend_gid, "New friend request", f"{my_email or 'Someone'} wants to be your friend.")
+            return jsonify({"ok": True, "message": f"Friend request sent to {email}."})
+        else:
+            return jsonify({"ok": True, "message": f"Request sent to {email}. They'll see it once they sign in with Google."})
+    return jsonify({"ok": False, "error": err or "Couldn't send friend request."}), 400
+
+@app.route("/api/dm/<friend_gid>/messages")
+def api_get_dm_messages(friend_gid):
+    my_gid = session.get("google_id")
+    if not my_gid:
+        return jsonify({"ok": False, "error": "Unauthorized"}), 401
+    dm_room = get_dm_room_id(my_gid, friend_gid)
+    if not dm_room:
+        return jsonify({"ok": False, "error": "Invalid DM room"}), 400
+    msgs = sb_list_direct_messages(dm_room, limit=100)
+    return jsonify({"ok": True, "messages": msgs, "dm_room": dm_room})
 
 @app.route("/api/notifications/mark-read", methods=["POST"])
 def api_mark_notifications_read():
@@ -1132,6 +1277,59 @@ def logout():
     flash("You have been logged out.","info")
     return redirect(url_for("index"))
 
+@app.route("/api/gifs/search")
+def api_search_gifs():
+    query = request.args.get("q", "").strip()
+    api_key = os.environ.get("GIPHY_API_KEY") or os.environ.get("GIPHY_KEY") or os.environ.get("GIFHY_API_KEY")
+
+    if not api_key:
+        # Curated fallback GIFs if no API key is set in environment yet
+        fallback_gifs = [
+            {"id": "artj92V8o75VPL7AeQ", "title": "Celebrate", "url": "https://media.giphy.com/media/artj92V8o75VPL7AeQ/giphy.gif", "preview": "https://media.giphy.com/media/artj92V8o75VPL7AeQ/giphy.gif"},
+            {"id": "111ebonMs90YLu", "title": "Thumbs Up", "url": "https://media.giphy.com/media/111ebonMs90YLu/giphy.gif", "preview": "https://media.giphy.com/media/111ebonMs90YLu/giphy.gif"},
+            {"id": "blSTtZehjAZ8I", "title": "Dance", "url": "https://media.giphy.com/media/blSTtZehjAZ8I/giphy.gif", "preview": "https://media.giphy.com/media/blSTtZehjAZ8I/giphy.gif"},
+            {"id": "B0vFTrb0ZGDf2", "title": "Laugh", "url": "https://media.giphy.com/media/B0vFTrb0ZGDf2/giphy.gif", "preview": "https://media.giphy.com/media/B0vFTrb0ZGDf2/giphy.gif"},
+            {"id": "Nx0rz3jtxt969CBKs3", "title": "Wave", "url": "https://media.giphy.com/media/Nx0rz3jtxt969CBKs3/giphy.gif", "preview": "https://media.giphy.com/media/Nx0rz3jtxt969CBKs3/giphy.gif"},
+            {"id": "26ufdipQqU2lhNA4g", "title": "Mind Blown", "url": "https://media.giphy.com/media/26ufdipQqU2lhNA4g/giphy.gif", "preview": "https://media.giphy.com/media/26ufdipQqU2lhNA4g/giphy.gif"},
+            {"id": "26BRv0ThflsHCqDrG", "title": "Love", "url": "https://media.giphy.com/media/26BRv0ThflsHCqDrG/giphy.gif", "preview": "https://media.giphy.com/media/26BRv0ThflsHCqDrG/giphy.gif"},
+            {"id": "nrXif9YExO9EI", "title": "Fire", "url": "https://media.giphy.com/media/nrXif9YExO9EI/giphy.gif", "preview": "https://media.giphy.com/media/nrXif9YExO9EI/giphy.gif"},
+            {"id": "7rj2ZgttvgomY", "title": "Clapping", "url": "https://media.giphy.com/media/7rj2ZgttvgomY/giphy.gif", "preview": "https://media.giphy.com/media/7rj2ZgttvgomY/giphy.gif"},
+        ]
+        if query:
+            q_lower = query.lower()
+            filtered = [g for g in fallback_gifs if q_lower in g["title"].lower()]
+            return jsonify({"ok": True, "gifs": filtered if filtered else fallback_gifs, "source": "fallback"})
+        return jsonify({"ok": True, "gifs": fallback_gifs, "source": "fallback"})
+
+    try:
+        if query:
+            url = "https://api.giphy.com/v1/gifs/search"
+            params = {"api_key": api_key, "q": query, "limit": 24, "rating": "g"}
+        else:
+            url = "https://api.giphy.com/v1/gifs/trending"
+            params = {"api_key": api_key, "limit": 24, "rating": "g"}
+
+        resp = _requests.get(url, params=params, timeout=6)
+        if resp.ok:
+            data = resp.json()
+            results = []
+            for item in data.get("data", []):
+                imgs = item.get("images", {})
+                gif_url = imgs.get("downsized_medium", {}).get("url") or imgs.get("fixed_height", {}).get("url") or imgs.get("original", {}).get("url")
+                preview_url = imgs.get("fixed_height_small", {}).get("url") or imgs.get("fixed_height", {}).get("url") or gif_url
+                if gif_url:
+                    results.append({
+                        "id": item.get("id"),
+                        "title": item.get("title", "GIF"),
+                        "url": gif_url,
+                        "preview": preview_url
+                    })
+            return jsonify({"ok": True, "gifs": results, "source": "giphy"})
+    except Exception as ex:
+        logging.info(f"Giphy API request error: {ex}")
+
+    return jsonify({"ok": True, "gifs": [], "source": "error"})
+
 
 # ─────────────────────────────── chat socket ────────────────────────────────
 @socketio.on("message")
@@ -1217,25 +1415,125 @@ def mark_seen(data):
     for u in updates:
         socketio.emit("seen_update", u, to=r)
 
+# ─────────────────────────────── Direct Message (DM) socket events ───────────
+def resolve_google_id(identifier):
+    if not identifier: return None
+    s = str(identifier).strip()
+    if "@" in s:
+        found = sb_find_user_by_email(s.lower())
+        if found: return str(found).strip()
+    return s
+
+def get_dm_room_id(gid_a, gid_b):
+    if not gid_a or not gid_b: return None
+    a = resolve_google_id(gid_a)
+    b = resolve_google_id(gid_b)
+    if not a or not b: return None
+    sorted_ids = sorted([a, b])
+    return "dm_" + hashlib.sha256((sorted_ids[0] + ":" + sorted_ids[1]).encode()).hexdigest()[:16]
+
+@socketio.on("join_dm")
+def handle_join_dm(data):
+    my_gid = session.get("google_id")
+    if not my_gid: return
+    raw_friend_gid = data.get("friend_gid")
+    if not raw_friend_gid: return
+    dm_room = get_dm_room_id(my_gid, raw_friend_gid)
+    if not dm_room: return
+    join_room(dm_room)
+    emit("dm_joined", {"dm_room": dm_room, "friend_gid": raw_friend_gid})
+
+@socketio.on("send_dm_message")
+def handle_send_dm_message(data):
+    my_gid = session.get("google_id")
+    my_name = session.get("preferred_name") or session.get("google_email") or session.get("name", "User")
+    if not my_gid: return
+    raw_friend = data.get("friend_gid")
+    ciphertext = data.get("ciphertext")
+    mtype = data.get("type", "text")
+    mid = data.get("id") or str(uuid.uuid4())
+    if not raw_friend or not ciphertext: return
+
+    resolved_friend = resolve_google_id(raw_friend) or raw_friend
+    dm_room = get_dm_room_id(my_gid, resolved_friend)
+    if not dm_room: return
+
+    ts = time.strftime('%H:%M %p')
+    content = {
+        "id": mid,
+        "sender_gid": str(my_gid),
+        "sender_name": my_name,
+        "recipient_gid": str(resolved_friend),
+        "dm_room": dm_room,
+        "type": mtype,
+        "ciphertext": ciphertext,
+        "reply_to": data.get("reply_to"),
+        "duration": data.get("duration"),
+        "mime": data.get("mime"),
+        "timestamp": ts,
+    }
+
+    # Emit to the shared DM room once
+    socketio.emit("dm_message", content, to=dm_room)
+
+    # Persist and notify asynchronously in background without delaying real-time socket
+    def _bg_persist_and_notify():
+        try:
+            sb_save_direct_message(
+                dm_room=dm_room,
+                sender_gid=str(my_gid),
+                sender_name=my_name,
+                recipient_gid=str(resolved_friend),
+                mtype=mtype,
+                ciphertext=ciphertext,
+            )
+            send_push(resolved_friend, f"Message from {my_name}", "You received an encrypted message")
+            sb_add_notification(resolved_friend, "message", f"Message from {my_name}", "You received an encrypted message")
+        except Exception as ex:
+            logging.info(f"Background DM persist error: {ex}")
+
+    socketio.start_background_task(_bg_persist_and_notify)
+
+@socketio.on("dm_typing")
+def handle_dm_typing(data):
+    my_gid = session.get("google_id")
+    my_name = session.get("preferred_name") or session.get("google_email") or "Friend"
+    friend_gid = data.get("friend_gid")
+    if not my_gid or not friend_gid: return
+    resolved_friend = resolve_google_id(friend_gid) or friend_gid
+    dm_room = get_dm_room_id(my_gid, resolved_friend)
+    if not dm_room: return
+    payload = {
+        "sender_gid": str(my_gid),
+        "sender_name": my_name,
+        "active": bool(data.get("active"))
+    }
+    socketio.emit("dm_typing", payload, to=dm_room, include_self=False)
+    socketio.emit("dm_typing", payload, to=f"user_{resolved_friend}", include_self=False)
+
 @socketio.on("connect")
 def connect(auth=None):
+    r    = session.get("room")
+    name = session.get("name")
+    if r and name and r in rooms:
+        join_room(r)
+        with _state_lock:
+            if name not in rooms[r]["members"]: rooms[r]["members"].append(name)
+            rooms[r].pop("empty_since", None)
+            connected_sids.setdefault(r, set()).add(name)
+            members = list(rooms[r]["members"])
+        send({"name":"System","type":"text","message":f"{name} entered the room",
+              "timestamp":time.strftime('%H:%M %p')}, to=r)
+        socketio.emit("member_list", members, to=r)
+        _push_admin_update()
+
+    gid = session.get("google_id")
+    if gid:
+        join_room(f"user_{gid}")
+
     if session.get("is_admin"):
         join_room("admin_channel")
         emit("admin_rooms_update", _admin_room_snapshot())
-
-    r    = session.get("room")
-    name = session.get("name")
-    if not r or not name or r not in rooms: return
-    join_room(r)
-    with _state_lock:
-        if name not in rooms[r]["members"]: rooms[r]["members"].append(name)
-        rooms[r].pop("empty_since", None)
-        connected_sids.setdefault(r, set()).add(name)
-        members = list(rooms[r]["members"])
-    send({"name":"System","type":"text","message":f"{name} entered the room",
-          "timestamp":time.strftime('%H:%M %p')}, to=r)
-    socketio.emit("member_list", members, to=r)
-    _push_admin_update()
 
 @socketio.on("disconnect")
 def disconnect():
@@ -1260,6 +1558,6 @@ def disconnect():
 
 
 if __name__ == "__main__":
-    debug = os.environ.get("FLASK_DEBUG","0") == "1"
+    debug = True
     socketio.run(app, host="0.0.0.0", port=10000, debug=debug, use_reloader=debug)
  
