@@ -141,6 +141,14 @@ def _supabase_headers():
 def supabase_available():
     return bool(SUPABASE_URL and SUPABASE_SERVICE_KEY)
 
+def email_to_name(email):
+    """Turn 'john.doe23@gmail.com' into 'John Doe23' - never show a raw email as a display name."""
+    if not email or "@" not in email:
+        return email or ""
+    local = email.split("@")[0]
+    cleaned = " ".join(part.capitalize() for part in re.split(r"[._\-+]", local) if part)
+    return cleaned or local
+
 def sb_list_friends(owner_google_id):
     if not supabase_available() or not owner_google_id: return []
     try:
@@ -163,11 +171,9 @@ def sb_list_friends(owner_google_id):
                     prof = sb_get_profile(f["friend_google_id"])
                     if prof and prof.get("display_name"):
                         f["friend_display_name"] = prof["display_name"]
-            # Fallback formatting for friend display name from email
+            # Fallback formatting for friend display name from email (never show raw email)
             if not f.get("friend_display_name") and f.get("friend_email"):
-                local = f["friend_email"].split("@")[0]
-                cleaned = " ".join(part.capitalize() for part in re.split(r"[._-]", local) if part)
-                f["friend_display_name"] = cleaned or local
+                f["friend_display_name"] = email_to_name(f["friend_email"])
         return rows
     except Exception as e:
         logging.info(f"Supabase list_friends failed: {e}")
@@ -404,6 +410,66 @@ def sb_upsert_profile(google_id, email, display_name):
     except Exception as e:
         return False, str(e)
 
+def sb_set_public_key(google_id, public_key_b64):
+    """Store this user's ECDH public key (server only ever relays this - never sees private key material)."""
+    if not supabase_available() or not google_id or not public_key_b64: return False
+    try:
+        r = _requests.post(
+            f"{SUPABASE_URL}/rest/v1/chat_profiles",
+            headers={**_supabase_headers(), "Prefer": "resolution=merge-duplicates"},
+            json={
+                "google_id": google_id,
+                "public_key": public_key_b64,
+                "updated_at": datetime.datetime.utcnow().isoformat(),
+            },
+            timeout=8,
+        )
+        return r.status_code < 400
+    except Exception as e:
+        logging.info(f"Supabase set_public_key failed: {e}")
+        return False
+
+def sb_get_public_key(google_id):
+    prof = sb_get_profile(google_id)
+    return (prof or {}).get("public_key")
+
+def sb_is_friend(owner_google_id, other_google_id):
+    """Confirm other_google_id is in owner_google_id's friends list (checked either direction)."""
+    if not supabase_available() or not owner_google_id or not other_google_id: return False
+    if str(owner_google_id) == str(other_google_id): return False
+    try:
+        r = _requests.get(
+            f"{SUPABASE_URL}/rest/v1/chat_friends",
+            headers=_supabase_headers(),
+            params={
+                "owner_google_id": f"eq.{owner_google_id}",
+                "friend_google_id": f"eq.{other_google_id}",
+                "limit": 1,
+            },
+            timeout=8,
+        )
+        r.raise_for_status()
+        if r.json(): return True
+    except Exception as e:
+        logging.info(f"Supabase is_friend check failed: {e}")
+    # Friendship rows are one-directional per-owner; also allow if the other side added us
+    try:
+        r = _requests.get(
+            f"{SUPABASE_URL}/rest/v1/chat_friends",
+            headers=_supabase_headers(),
+            params={
+                "owner_google_id": f"eq.{other_google_id}",
+                "friend_google_id": f"eq.{owner_google_id}",
+                "limit": 1,
+            },
+            timeout=8,
+        )
+        r.raise_for_status()
+        return bool(r.json())
+    except Exception as e:
+        logging.info(f"Supabase is_friend reverse check failed: {e}")
+        return False
+
 def sb_add_notification(owner_google_id, kind, title, body="", room_code=None):
     if not supabase_available() or not owner_google_id: return False
     try:
@@ -478,20 +544,26 @@ def sb_mark_notifications_read(owner_google_id):
         return False
 
 # ─────────────────────────────── direct messages storage ────────────────────
-def sb_save_direct_message(dm_room, sender_gid, sender_name, recipient_gid, mtype, ciphertext):
+def sb_save_direct_message(dm_room, sender_gid, sender_name, recipient_gid, mtype, ciphertext,
+                            client_id=None, reply_to=None, mime=None, duration=None):
     if not supabase_available(): return False
     try:
+        payload = {
+            "dm_room": dm_room,
+            "sender_google_id": sender_gid,
+            "sender_name": sender_name,
+            "recipient_google_id": recipient_gid,
+            "type": mtype,
+            "ciphertext": ciphertext,
+            "client_id": client_id,
+            "reply_to": reply_to,
+            "mime": mime,
+            "duration": duration,
+        }
         r = _requests.post(
             f"{SUPABASE_URL}/rest/v1/chat_direct_messages",
             headers=_supabase_headers(),
-            json={
-                "dm_room": dm_room,
-                "sender_google_id": sender_gid,
-                "sender_name": sender_name,
-                "recipient_google_id": recipient_gid,
-                "type": mtype,
-                "ciphertext": ciphertext,
-            },
+            json=payload,
             timeout=8,
         )
         return r.status_code < 400
@@ -904,11 +976,43 @@ def api_get_dm_messages(friend_gid):
     my_gid = session.get("google_id")
     if not my_gid:
         return jsonify({"ok": False, "error": "Unauthorized"}), 401
-    dm_room = get_dm_room_id(my_gid, friend_gid)
+    resolved_friend = resolve_google_id(friend_gid) or friend_gid
+    if not sb_is_friend(my_gid, resolved_friend):
+        return jsonify({"ok": False, "error": "Not friends with this user."}), 403
+    dm_room = get_dm_room_id(my_gid, resolved_friend)
     if not dm_room:
         return jsonify({"ok": False, "error": "Invalid DM room"}), 400
     msgs = sb_list_direct_messages(dm_room, limit=100)
     return jsonify({"ok": True, "messages": msgs, "dm_room": dm_room})
+
+@app.route("/api/pubkey/set", methods=["POST"])
+def api_set_pubkey():
+    """Publish my ECDH (P-256) public key so friends can derive a shared DM secret.
+    Server only ever stores/relays this opaque public key blob - it cannot derive the
+    shared secret from it, so it never gains the ability to read DM content."""
+    check_csrf()
+    require_google()
+    gid = session["google_id"]
+    data = request.get_json(silent=True) or {}
+    pubkey = (data.get("public_key") or "").strip()
+    if not pubkey or len(pubkey) > 500:
+        return jsonify({"ok": False, "error": "Invalid public key."}), 400
+    ok = sb_set_public_key(gid, pubkey)
+    return jsonify({"ok": ok})
+
+@app.route("/api/pubkey/<gid>")
+def api_get_pubkey(gid):
+    my_gid = session.get("google_id")
+    if not my_gid:
+        return jsonify({"ok": False, "error": "Unauthorized"}), 401
+    resolved = resolve_google_id(gid) or gid
+    # Only expose public keys between confirmed friends (or your own, for multi-device sync)
+    if str(resolved) != str(my_gid) and not sb_is_friend(my_gid, resolved):
+        return jsonify({"ok": False, "error": "Not friends with this user."}), 403
+    pubkey = sb_get_public_key(resolved)
+    if not pubkey:
+        return jsonify({"ok": False, "error": "No public key on file yet."}), 404
+    return jsonify({"ok": True, "public_key": pubkey, "google_id": resolved})
 
 @app.route("/api/notifications/mark-read", methods=["POST"])
 def api_mark_notifications_read():
@@ -1438,15 +1542,19 @@ def handle_join_dm(data):
     if not my_gid: return
     raw_friend_gid = data.get("friend_gid")
     if not raw_friend_gid: return
-    dm_room = get_dm_room_id(my_gid, raw_friend_gid)
+    resolved_friend = resolve_google_id(raw_friend_gid) or raw_friend_gid
+    if not sb_is_friend(my_gid, resolved_friend):
+        emit("dm_error", {"error": "You can only message confirmed friends."})
+        return
+    dm_room = get_dm_room_id(my_gid, resolved_friend)
     if not dm_room: return
     join_room(dm_room)
-    emit("dm_joined", {"dm_room": dm_room, "friend_gid": raw_friend_gid})
+    emit("dm_joined", {"dm_room": dm_room, "friend_gid": resolved_friend})
 
 @socketio.on("send_dm_message")
 def handle_send_dm_message(data):
     my_gid = session.get("google_id")
-    my_name = session.get("preferred_name") or session.get("google_email") or session.get("name", "User")
+    my_name = session.get("preferred_name") or email_to_name(session.get("google_email")) or session.get("name", "User")
     if not my_gid: return
     raw_friend = data.get("friend_gid")
     ciphertext = data.get("ciphertext")
@@ -1455,8 +1563,15 @@ def handle_send_dm_message(data):
     if not raw_friend or not ciphertext: return
 
     resolved_friend = resolve_google_id(raw_friend) or raw_friend
+    if not sb_is_friend(my_gid, resolved_friend):
+        emit("dm_error", {"error": "You can only message confirmed friends."})
+        return
     dm_room = get_dm_room_id(my_gid, resolved_friend)
     if not dm_room: return
+
+    reply_to = data.get("reply_to")
+    duration = data.get("duration")
+    mime = data.get("mime")
 
     ts = time.strftime('%H:%M %p')
     content = {
@@ -1467,9 +1582,9 @@ def handle_send_dm_message(data):
         "dm_room": dm_room,
         "type": mtype,
         "ciphertext": ciphertext,
-        "reply_to": data.get("reply_to"),
-        "duration": data.get("duration"),
-        "mime": data.get("mime"),
+        "reply_to": reply_to,
+        "duration": duration,
+        "mime": mime,
         "timestamp": ts,
     }
 
@@ -1486,6 +1601,10 @@ def handle_send_dm_message(data):
                 recipient_gid=str(resolved_friend),
                 mtype=mtype,
                 ciphertext=ciphertext,
+                client_id=mid,
+                reply_to=reply_to,
+                mime=mime,
+                duration=duration,
             )
             send_push(resolved_friend, f"Message from {my_name}", "You received an encrypted message")
             sb_add_notification(resolved_friend, "message", f"Message from {my_name}", "You received an encrypted message")
@@ -1497,7 +1616,7 @@ def handle_send_dm_message(data):
 @socketio.on("dm_typing")
 def handle_dm_typing(data):
     my_gid = session.get("google_id")
-    my_name = session.get("preferred_name") or session.get("google_email") or "Friend"
+    my_name = session.get("preferred_name") or email_to_name(session.get("google_email")) or "Friend"
     friend_gid = data.get("friend_gid")
     if not my_gid or not friend_gid: return
     resolved_friend = resolve_google_id(friend_gid) or friend_gid

@@ -3321,6 +3321,25 @@ body, .title, ul, .container, .navbar-msg, .inputs,
   display: block;
 }
 
+.chat-sticker-grid {
+  grid-template-columns: repeat(auto-fill, minmax(56px, 1fr));
+}
+.chat-sticker-item {
+  aspect-ratio: 1/1;
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 30px;
+  cursor: pointer;
+  background: var(--form-input-bg);
+  transition: transform .15s ease, background .15s ease;
+}
+.chat-sticker-item:hover {
+  transform: scale(1.15);
+  background: var(--form-input-bg-hover, rgba(0,0,0,0.06));
+}
+
 .chat-gif-icon-btn {
   font-size: 10.5px !important;
   font-weight: 800 !important;
