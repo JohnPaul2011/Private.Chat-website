@@ -799,12 +799,16 @@
           const pubB64 = bufToB64(rawPub);
           const alreadyPublished = sessionStorage.getItem("pubkey-published-" + MY_GOOGLE_ID);
           if (alreadyPublished !== pubB64) {
-            await fetch("/api/pubkey/set", {
+            const res = await fetch("/api/pubkey/set", {
               method: "POST",
-              headers: { "Content-Type": "application/json" },
+              headers: { "Content-Type": "application/json", "X-CSRF-Token": "{{ csrf_token() }}" },
               body: JSON.stringify({ public_key: pubB64 })
             });
-            sessionStorage.setItem("pubkey-published-" + MY_GOOGLE_ID, pubB64);
+            if (res.ok) {
+              sessionStorage.setItem("pubkey-published-" + MY_GOOGLE_ID, pubB64);
+            } else {
+              console.error("Failed to publish public key: HTTP", res.status);
+            }
           }
         } catch (e) { console.error("Failed to publish public key:", e); }
 
@@ -816,14 +820,23 @@
 
     async function fetchFriendPublicKey(friendGid) {
       const res = await fetch(`/api/pubkey/${encodeURIComponent(friendGid)}`);
-      if (!res.ok) return null;
+      if (!res.ok) {
+        console.warn("fetchFriendPublicKey: HTTP", res.status, "for friend", friendGid);
+        return null;
+      }
       const data = await res.json();
-      if (!data.ok || !data.public_key) return null;
+      if (!data.ok || !data.public_key) {
+        console.warn("fetchFriendPublicKey: no key yet for friend", friendGid, data.error || "");
+        return null;
+      }
       try {
         return await crypto.subtle.importKey(
           "raw", b64ToBuf(data.public_key), { name: "ECDH", namedCurve: "P-256" }, false, []
         );
-      } catch (e) { return null; }
+      } catch (e) {
+        console.error("fetchFriendPublicKey: import failed", e);
+        return null;
+      }
     }
 
     // Derive the shared AES-256-GCM key for a given friend via ECDH + HKDF.
