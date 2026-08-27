@@ -1588,8 +1588,11 @@ def handle_send_dm_message(data):
         "timestamp": ts,
     }
 
-    # Emit to the shared DM room once
+    # Emit to the shared DM room (if either side has it open) AND the recipient's
+    # personal room (always joined on connect) so delivery doesn't depend on the
+    # recipient already having this specific conversation open - matches dm_typing.
     socketio.emit("dm_message", content, to=dm_room)
+    socketio.emit("dm_message", content, to=f"user_{resolved_friend}", include_self=False)
 
     # Persist and notify asynchronously in background without delaying real-time socket
     def _bg_persist_and_notify():

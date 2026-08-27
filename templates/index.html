@@ -1790,7 +1790,9 @@
       socketio.on("dm_message", async (data) => {
         if (!data || !data.ciphertext) return;
         if (data.id && sentMessageIds.has(data.id)) return; // Ignore own echo
-        if (data.sender_gid === MY_GOOGLE_ID) return; // Ignore own outgoing broadcast
+        if (String(data.sender_gid) === String(MY_GOOGLE_ID)) return; // Ignore own outgoing broadcast
+        if (data.id && renderedMessageIds.has(data.id)) return; // Already delivered via the other channel (dm_room + personal room both fire)
+        if (data.id) renderedMessageIds.add(data.id); // Claim immediately, before any await, to close the double-delivery race window
 
         const otherGid = data.sender_gid;
         let plaintext = data.ciphertext;
@@ -1815,14 +1817,14 @@
         const contentVal = audioUrl || plaintext;
 
         // If this message belongs to the open chat, render it immediately
-        if (currentActiveFriendGid === otherGid) {
+        if (String(currentActiveFriendGid) === String(otherGid)) {
           renderMessageToFeed(senderLabel, contentVal, false, data.type || "text", data.timestamp, data.id, data.reply_to);
-          playNotificationSound();
         }
+        playNotificationSound();
       });
 
       socketio.on("dm_typing", (data) => {
-        if (!data || data.sender_gid !== currentActiveFriendGid) return;
+        if (!data || String(data.sender_gid) !== String(currentActiveFriendGid)) return;
         const name = data.sender_name || "Friend";
         if (data.active) {
           activeTypingUsers.add(name);
