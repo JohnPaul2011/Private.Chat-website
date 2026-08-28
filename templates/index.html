@@ -775,27 +775,51 @@
       } catch (e) { return false; }
     }
 
-    // Generate (or load) this device's ECDH keypair, keep the private key non-extractable
-    // in IndexedDB (browsers support storing live CryptoKey objects there), and publish
-    // the public key to the server so friends can look it up.
+    // Generate (or load) this device's ECDH keypair. The private key is stored as
+    // exported PKCS8 bytes in IndexedDB (not as a live CryptoKey object) and re-imported
+    // fresh each session - storing raw CryptoKey objects via structured clone is flaky
+    // across some browsers/WebViews and can throw NotSupportedError from deriveBits later.
+    // The exported bytes never leave this device (never sent to the server), so this is
+    // still fully local - only the derivation mechanism changed, not the security model.
     async function ensureMyEcdhKeyPair() {
       if (myEcdhKeyPair) return myEcdhKeyPair;
       if (myEcdhReady) return myEcdhReady;
 
       myEcdhReady = (async () => {
-        let pair = await idbGet("ecdh-keypair-" + MY_GOOGLE_ID);
-        if (!pair || !pair.privateKey || !pair.publicKey) {
-          const generated = await crypto.subtle.generateKey(
-            { name: "ECDH", namedCurve: "P-256" }, false, ["deriveKey"]
-          );
-          pair = { privateKey: generated.privateKey, publicKey: generated.publicKey };
-          await idbSet("ecdh-keypair-" + MY_GOOGLE_ID, pair);
+        const idbKey = "ecdh-keypair-v3-" + MY_GOOGLE_ID;
+        let stored = await idbGet(idbKey);
+        let privateKey, publicKey;
+
+        if (stored && stored.pkcs8 && stored.rawPub) {
+          try {
+            privateKey = await crypto.subtle.importKey(
+              "pkcs8", stored.pkcs8, { name: "ECDH", namedCurve: "P-256" }, true, ["deriveKey", "deriveBits"]
+            );
+            publicKey = await crypto.subtle.importKey(
+              "raw", stored.rawPub, { name: "ECDH", namedCurve: "P-256" }, true, []
+            );
+          } catch (e) {
+            console.error("Stored keypair failed to re-import, regenerating:", e);
+            stored = null;
+          }
         }
-        myEcdhKeyPair = pair;
+
+        if (!stored) {
+          const generated = await crypto.subtle.generateKey(
+            { name: "ECDH", namedCurve: "P-256" }, true, ["deriveKey", "deriveBits"]
+          );
+          privateKey = generated.privateKey;
+          publicKey = generated.publicKey;
+          const pkcs8 = await crypto.subtle.exportKey("pkcs8", privateKey);
+          const rawPub = await crypto.subtle.exportKey("raw", publicKey);
+          await idbSet(idbKey, { pkcs8, rawPub });
+        }
+
+        myEcdhKeyPair = { privateKey, publicKey };
 
         // Publish our public key (idempotent - safe to call every session)
         try {
-          const rawPub = await crypto.subtle.exportKey("raw", pair.publicKey);
+          const rawPub = await crypto.subtle.exportKey("raw", publicKey);
           const pubB64 = bufToB64(rawPub);
           const alreadyPublished = sessionStorage.getItem("pubkey-published-" + MY_GOOGLE_ID);
           if (alreadyPublished !== pubB64) {
@@ -812,7 +836,7 @@
           }
         } catch (e) { console.error("Failed to publish public key:", e); }
 
-        return pair;
+        return myEcdhKeyPair;
       })();
 
       return myEcdhReady;
