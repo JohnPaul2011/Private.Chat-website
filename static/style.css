@@ -3494,6 +3494,17 @@ body, .title, ul, .container, .navbar-msg, .inputs,
   border-radius: 0 !important;
   box-shadow: none !important;
   line-height: 1.4;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 120px;
+  overflow-y: auto;
+}
+
+.chat-input-field:empty::before {
+  content: attr(data-placeholder);
+  color: var(--wa-sub);
+  opacity: 0.8;
+  pointer-events: none;
 }
 
 .chat-input-field::placeholder {
