@@ -59,7 +59,7 @@ app.config['SESSION_COOKIE_HTTPONLY'] = True
 app.config['SESSION_COOKIE_SAMESITE'] = "Lax"
 app.config['SESSION_COOKIE_SECURE'] = os.environ.get("FORCE_HTTPS", "0") == "1"
 app.config['PERMANENT_SESSION_LIFETIME'] = datetime.timedelta(minutes=30)
-socketio = SocketIO(app, async_mode=ASYNC_MODE, logger=False, engineio_logger=False,
+socketio = SocketIO(app, async_mode=ASYNC_MODE, logger=False, engineio_logger=False, cors_allowed_origins=[])
                     ping_timeout=10, ping_interval=8)
 
 # ── Google OAuth ──
@@ -1749,6 +1749,7 @@ def vapid_public_key():
 
 
 @app.route("/save-subscription", methods=["POST"])
+@rate_limited("save_subscription")
 def save_subscription():
     check_csrf()
     gid = session.get("google_id")
@@ -1763,6 +1764,7 @@ def save_subscription():
 
 
 @app.route("/remove-subscription", methods=["POST"])
+@rate_limited("remove_subscription")
 def remove_subscription():
     check_csrf()
     gid = session.get("google_id")
@@ -1794,6 +1796,7 @@ def account():
 
 
 @app.route("/account/update-name", methods=["POST"])
+@rate_limited("update_name")
 def update_name():
     check_csrf()
     require_google()
@@ -1816,6 +1819,7 @@ def update_name():
 
 
 @app.route("/account/friends/add", methods=["POST"])
+@rate_limited("add_friend")
 def add_friend():
     check_csrf()
     require_google()
@@ -1853,6 +1857,7 @@ def add_friend():
 
 
 @app.route("/account/friends/remove", methods=["POST"])
+@rate_limited("remove_friend")
 def remove_friend():
     check_csrf()
     require_google()
@@ -1876,6 +1881,7 @@ def api_friend_requests():
 
 
 @app.route("/api/friend-requests/<request_id>/accept", methods=["POST"])
+@rate_limited("api_accept_friend_request")
 def api_accept_friend_request(request_id):
     check_csrf()
     require_google()
@@ -1900,6 +1906,7 @@ def api_accept_friend_request(request_id):
 
 
 @app.route("/api/friend-requests/<request_id>/decline", methods=["POST"])
+@rate_limited("api_decline_friend_request")
 def api_decline_friend_request(request_id):
     check_csrf()
     require_google()
@@ -1912,6 +1919,7 @@ def api_decline_friend_request(request_id):
 
 
 @app.route("/api/friend-requests/<request_id>/cancel", methods=["POST"])
+@rate_limited("api_cancel_friend_request")
 def api_cancel_friend_request(request_id):
     check_csrf()
     require_google()
@@ -1923,6 +1931,7 @@ def api_cancel_friend_request(request_id):
 
 
 @app.route("/api/friends/add", methods=["POST"])
+@rate_limited("api_add_friend")
 def api_add_friend():
     check_csrf()
     if not session.get("google_id"):
@@ -1973,6 +1982,7 @@ def api_get_dm_messages(friend_gid):
 
 
 @app.route("/api/pubkey/set", methods=["POST"])
+@rate_limited("api_set_pubkey")
 def api_set_pubkey():
     check_csrf()
     require_google()
@@ -2000,6 +2010,7 @@ def api_get_pubkey(gid):
 
 
 @app.route("/api/notifications/mark-read", methods=["POST"])
+@rate_limited("api_mark_notifications_read")
 def api_mark_notifications_read():
     check_csrf()
     require_google()
@@ -2016,6 +2027,7 @@ def api_unread_count():
 
 
 @app.route("/account/test-push", methods=["POST"])
+@rate_limited("test_push")
 def test_push():
     check_csrf()
     require_google()
@@ -2033,6 +2045,7 @@ def test_push():
 # =============================================================================
 
 @app.route("/admin/login", methods=["GET", "POST"])
+@rate_limited("admin_login")
 def admin_login():
     if request.method == "POST":
         key = "admin:" + client_ip()
@@ -2137,6 +2150,7 @@ def admin_dashboard():
 
 
 @app.route("/admin/broadcast", methods=["POST"])
+@rate_limited("admin_broadcast")
 def admin_broadcast():
     require_admin()
     check_csrf()
@@ -2162,6 +2176,7 @@ def admin_broadcast():
 
 
 @app.route("/admin/push-broadcast", methods=["POST"])
+@rate_limited("admin_push_broadcast")
 def admin_push_broadcast():
     require_admin()
     check_csrf()
@@ -2200,16 +2215,19 @@ def api_db_status():
 
 @socketio.on("connect")
 def connect(auth=None):
+    # WebSocket authentication check
     gid = session.get("google_id")
-    if gid:
-        join_room(f"user_{gid}")
-        with _state_lock:
-            connected_users[gid] = {
-                "name": session.get("preferred_name") or session.get("name", "User"),
-                "email": session.get("google_email", ""),
-                "connected_at": datetime.datetime.utcnow().isoformat(),
-                "last_active": datetime.datetime.utcnow().isoformat(),
-            }
+    if not gid:
+        return False  # Reject connection if not authenticated
+    
+    join_room(f"user_{gid}")
+    with _state_lock:
+        connected_users[gid] = {
+            "name": session.get("preferred_name") or session.get("name", "User"),
+            "email": session.get("google_email", ""),
+            "connected_at": datetime.datetime.utcnow().isoformat(),
+            "last_active": datetime.datetime.utcnow().isoformat(),
+        }
     if session.get("is_admin"):
         join_room("admin_channel")
 
