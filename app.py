@@ -60,7 +60,6 @@ app.config['SESSION_COOKIE_SAMESITE'] = "Lax"
 app.config['SESSION_COOKIE_SECURE'] = os.environ.get("FORCE_HTTPS", "0") == "1"
 app.config['PERMANENT_SESSION_LIFETIME'] = datetime.timedelta(minutes=30)
 socketio = SocketIO(app, async_mode=ASYNC_MODE, logger=False, engineio_logger=False, cors_allowed_origins=[])
-                    ping_timeout=10, ping_interval=8)
 
 # ── Google OAuth ──
 GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID", "")
@@ -114,19 +113,40 @@ def supabase_available():
 
 # ── Local SQLite Fallback Database ──
 LOCAL_DB_PATH = os.environ.get("LOCAL_DB_PATH", os.path.join(os.path.dirname(__file__), "local_chat.db"))
-_local_db = None
-_local_db_lock = threading.Lock()
+
+# SQLite Connection Pool (max 5 connections)
+_sqlite_pool = []
+_sqlite_pool_lock = threading.Lock()
+
 
 def _get_local_db():
-    """Get or create local SQLite database connection."""
-    global _local_db
-    if _local_db is None:
-        with _local_db_lock:
-            if _local_db is None:
-                _local_db = _sqlite3.connect(LOCAL_DB_PATH, check_same_thread=False)
-                _local_db.row_factory = _sqlite3.Row
-                _init_local_db(_local_db)
-    return _local_db
+    """Get or create local SQLite database connection with pooling."""
+    global _sqlite_pool
+    
+    with _sqlite_pool_lock:
+        if _sqlite_pool:
+            conn = _sqlite_pool.pop()
+            conn.row_factory = _sqlite3.Row
+            return conn
+        
+        # Create new connection
+        conn = _sqlite3.connect(LOCAL_DB_PATH, check_same_thread=False)
+        conn.row_factory = _sqlite3.Row
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA synchronous=NORMAL")
+        conn.execute("PRAGMA cache_size=-20000")  # 20MB cache
+        _init_local_db(conn)
+        return conn
+
+
+def _return_local_db(conn):
+    """Return connection to pool."""
+    global _sqlite_pool
+    with _sqlite_pool_lock:
+        if len(_sqlite_pool) < 5:  # Max 5 connections in pool
+            _sqlite_pool.append(conn)
+        else:
+            conn.close()
 
 def _init_local_db(conn):
     """Initialize local SQLite database with required tables."""
@@ -1068,6 +1088,7 @@ def lb_add_friend(owner_google_id, owner_email, friend_google_id, friend_email, 
             ("chat_friends", cursor.lastrowid, "insert")
         )
         conn.commit()
+        _return_local_db(conn)
         return True, None
     except Exception as e:
         logging.info(f"Local DB add_friend failed: {e}")
@@ -1093,6 +1114,7 @@ def lb_remove_friend(owner_google_id, friend_google_id):
                 ("chat_friends", friend_google_id, "delete")
             )
             conn.commit()
+        _return_local_db(conn)
         return True
     except Exception as e:
         logging.info(f"Local DB remove_friend failed: {e}")
@@ -1167,6 +1189,7 @@ def lb_upsert_profile(google_id, email, display_name):
             ("chat_profiles", google_id, "upsert")
         )
         conn.commit()
+        _return_local_db(conn)
         return True, None
     except Exception as e:
         logging.info(f"Local DB upsert_profile failed: {e}")
@@ -1192,6 +1215,7 @@ def lb_set_public_key(google_id, public_key_b64):
                 ("chat_profiles", google_id, "update")
             )
             conn.commit()
+        _return_local_db(conn)
         return True
     except Exception as e:
         logging.info(f"Local DB set_public_key failed: {e}")
@@ -1250,6 +1274,7 @@ def lb_save_direct_message(dm_room, sender_gid, sender_name, recipient_gid, mtyp
             ("chat_direct_messages", cursor.lastrowid, "insert")
         )
         conn.commit()
+        _return_local_db(conn)
         return True
     except Exception as e:
         logging.info(f"Local DB save_direct_message failed: {e}")
@@ -1294,6 +1319,7 @@ def lb_create_friend_request(sender_gid, sender_email, recipient_email, recipien
             ("chat_friend_requests", cursor.lastrowid, "insert")
         )
         conn.commit()
+        _return_local_db(conn)
         return True, None
     except Exception as e:
         logging.info(f"Local DB create_friend_request failed: {e}")
@@ -1371,6 +1397,7 @@ def lb_respond_friend_request(request_id, status):
                 ("chat_friend_requests", int(request_id), "update")
             )
             conn.commit()
+        _return_local_db(conn)
         return True
     except Exception as e:
         logging.info(f"Local DB respond_friend_request failed: {e}")
@@ -1396,6 +1423,7 @@ def lb_cancel_friend_request(request_id, sender_gid):
                 ("chat_friend_requests", int(request_id), "delete")
             )
             conn.commit()
+        _return_local_db(conn)
         return True
     except Exception as e:
         logging.info(f"Local DB cancel_friend_request failed: {e}")
@@ -1423,6 +1451,7 @@ def lb_add_notification(owner_google_id, kind, title, body="", room_code=None):
             ("chat_notifications", cursor.lastrowid, "insert")
         )
         conn.commit()
+        _return_local_db(conn)
         return True
     except Exception as e:
         logging.info(f"Local DB add_notification failed: {e}")
@@ -1493,6 +1522,7 @@ def lb_create_announcement(title, content):
             ("chat_announcements", cursor.lastrowid, "insert")
         )
         conn.commit()
+        _return_local_db(conn)
         return True, None
     except Exception as e:
         logging.info(f"Local DB create_announcement failed: {e}")
@@ -1518,6 +1548,7 @@ def lb_delete_announcement(announcement_id):
             ("chat_announcements", announcement_id, "delete")
         )
         conn.commit()
+        _return_local_db(conn)
         return True
     except Exception as e:
         logging.info(f"Local DB delete_announcement failed: {e}")
@@ -1543,6 +1574,7 @@ def lb_toggle_announcement(announcement_id, is_active):
             ("chat_announcements", announcement_id, "update")
         )
         conn.commit()
+        _return_local_db(conn)
         return True
     except Exception as e:
         logging.info(f"Local DB toggle_announcement failed: {e}")
@@ -1563,6 +1595,7 @@ def lb_toggle_announcement(announcement_id, is_active):
                 ("chat_notifications", owner_google_id, "update")
             )
             conn.commit()
+        _return_local_db(conn)
         return True
     except Exception as e:
         logging.info(f"Local DB mark_notifications_read failed: {e}")
@@ -1829,6 +1862,55 @@ def get_admin_stats():
         "total_active_dms": total_active_dms,
         "total_messages": total_messages,
     }
+
+
+def batch_get_profiles(google_ids):
+    """Batch fetch multiple profiles in a single query to avoid N+1."""
+    if not google_ids:
+        return {}
+    
+    # Deduplicate
+    unique_ids = list(set(google_ids))
+    
+    if supabase_available():
+        try:
+            # Supabase: fetch all profiles at once
+            id_list = ",".join(unique_ids)
+            r = _requests.get(
+                f"{SUPABASE_URL}/rest/v1/chat_profiles",
+                headers=_supabase_headers(),
+                params={"google_id": f"in.({id_list})", "limit": 100},
+                timeout=8,
+            )
+            r.raise_for_status()
+            profiles = r.json()
+            return {p["google_id"]: p for p in profiles}
+        except Exception as e:
+            logging.info(f"Supabase batch_get_profiles failed, falling back to local: {e}")
+    
+    # Fallback to local
+    return lb_batch_get_profiles(unique_ids)
+
+
+def lb_batch_get_profiles(google_ids):
+    """Local SQLite fallback for batch profile fetch."""
+    if not google_ids:
+        return {}
+    
+    try:
+        conn = _get_local_db()
+        cursor = conn.cursor()
+        placeholders = ",".join("?" * len(google_ids))
+        cursor.execute(
+            f"SELECT * FROM chat_profiles WHERE google_id IN ({placeholders})",
+            google_ids
+        )
+        rows = cursor.fetchall()
+        return {r["google_id"]: dict(r) for r in rows}
+    except Exception as e:
+        logging.info(f"Local DB batch_get_profiles failed: {e}")
+        return {}
+
 
 
 # =============================================================================
@@ -2286,62 +2368,55 @@ def admin_dashboard():
     db_ok = check_db_status()
     db_error = DB_STATUS["last_error"] if not db_ok else None
     
-    # Get all users with active sessions
+    # Get all users with active sessions - BATCH OPTIMIZATION
     all_users = []
-    if db_ok:
-        with _state_lock:
-            for gid, user_data in connected_users.items():
-                profile = sb_get_profile(gid)
-                all_users.append({
-                    "google_id": gid,
-                    "name": user_data.get("name", "Unknown"),
-                    "email": user_data.get("email", ""),
-                    "connected_at": user_data.get("connected_at", ""),
-                    "last_active": user_data.get("last_active", ""),
-                    "display_name": profile.get("display_name", "") if profile else "",
-                })
-    else:
-        # Fallback: show connected users from memory
-        with _state_lock:
-            for gid, user_data in connected_users.items():
-                all_users.append({
-                    "google_id": gid,
-                    "name": user_data.get("name", "Unknown"),
-                    "email": user_data.get("email", ""),
-                    "connected_at": user_data.get("connected_at", ""),
-                    "last_active": user_data.get("last_active", ""),
-                    "display_name": "",
-                })
+    with _state_lock:
+        user_gids = list(connected_users.keys())
     
-    # Get active DM rooms
+    # Batch fetch all profiles in one query
+    profiles_batch = batch_get_profiles(user_gids) if db_ok else {}
+    
+    for gid, user_data in connected_users.items():
+        profile = profiles_batch.get(gid)
+        all_users.append({
+            "google_id": gid,
+            "name": user_data.get("name", "Unknown"),
+            "email": user_data.get("email", ""),
+            "connected_at": user_data.get("connected_at", ""),
+            "last_active": user_data.get("last_active", ""),
+            "display_name": profile.get("display_name", "") if profile else "",
+        })
+    
+    # Get active DM rooms - BATCH OPTIMIZATION
     active_dms = []
-    if db_ok:
-        with _state_lock:
-            for dm_room, room_data in active_dm_rooms.items():
-                user1 = sb_get_profile(room_data.get("user1_gid"))
-                user2 = sb_get_profile(room_data.get("user2_gid"))
-                active_dms.append({
-                    "dm_room": dm_room,
-                    "user1": user1.get("display_name", "Unknown") if user1 else "Unknown",
-                    "user1_email": user1.get("email", "") if user1 else "",
-                    "user2": user2.get("display_name", "Unknown") if user2 else "Unknown",
-                    "user2_email": user2.get("email", "") if user2 else "",
-                    "created_at": room_data.get("created_at", ""),
-                    "message_count": room_data.get("message_count", 0),
-                })
-    else:
-        # Fallback: show DM rooms from memory
-        with _state_lock:
-            for dm_room, room_data in active_dm_rooms.items():
-                active_dms.append({
-                    "dm_room": dm_room,
-                    "user1": "User",
-                    "user1_email": "",
-                    "user2": "User",
-                    "user2_email": "",
-                    "created_at": room_data.get("created_at", ""),
-                    "message_count": room_data.get("message_count", 0),
-                })
+    with _state_lock:
+        dm_room_list = list(active_dm_rooms.items())
+    
+    # Collect all unique user IDs from DM rooms
+    all_dm_user_gids = set()
+    for dm_room, room_data in dm_room_list:
+        if room_data.get("user1_gid"):
+            all_dm_user_gids.add(room_data.get("user1_gid"))
+        if room_data.get("user2_gid"):
+            all_dm_user_gids.add(room_data.get("user2_gid"))
+    
+    # Batch fetch all profiles
+    dm_profiles_batch = batch_get_profiles(list(all_dm_user_gids)) if db_ok else {}
+    
+    for dm_room, room_data in dm_room_list:
+        user1_gid = room_data.get("user1_gid")
+        user2_gid = room_data.get("user2_gid")
+        user1 = dm_profiles_batch.get(user1_gid)
+        user2 = dm_profiles_batch.get(user2_gid)
+        active_dms.append({
+            "dm_room": dm_room,
+            "user1": user1.get("display_name", "Unknown") if user1 else "Unknown",
+            "user1_email": user1.get("email", "") if user1 else "",
+            "user2": user2.get("display_name", "Unknown") if user2 else "Unknown",
+            "user2_email": user2.get("email", "") if user2 else "",
+            "created_at": room_data.get("created_at", ""),
+            "message_count": room_data.get("message_count", 0),
+        })
     
     return render_template(
         "admin.html",
