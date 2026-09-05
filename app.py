@@ -294,6 +294,7 @@ def check_db_status():
     except Exception as e:
         DB_STATUS["ok"] = False
         DB_STATUS["last_error"] = "Connection failed"
+        logging.info(f"Database connection check failed: {e}")
         return False
 
 
@@ -1526,7 +1527,7 @@ def lb_create_announcement(title, content):
         return True, None
     except Exception as e:
         logging.info(f"Local DB create_announcement failed: {e}")
-        return False, str(e)
+        return False, "Database error"
 
 
 def lb_delete_announcement(announcement_id):
@@ -1937,7 +1938,7 @@ def _check_db_and_alert():
         if request.endpoint and request.endpoint not in ['static', 'vapid_public_key']:
             if not session.get("_db_alert_shown"):
                 flash(
-                    f"⚠️ Database connection issue: {db_status['error'] or 'Service unavailable'}. "
+                    f"⚠️ Database connection issue: {db_status['error'] or 'Database is currently offline'}. "
                     "Some features may be limited.",
                     "warning"
                 )

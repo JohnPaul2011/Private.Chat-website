@@ -60,7 +60,7 @@
             <line x1="12" y1="8" x2="12" y2="12"/>
             <line x1="12" y1="16" x2="12.01" y2="16"/>
           </svg>
-          <span>⚠️ Database issue: ${error || 'Service unavailable'}. Some features may be limited.</span>
+          <span>⚠️ Database issue: ${error || 'Database is currently offline'}. Some features may be limited.</span>
           <button onclick="this.closest('.db-alert').remove()" title="Dismiss">&times;</button>
         `;
         document.body.prepend(alert);

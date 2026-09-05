@@ -406,7 +406,7 @@
                 <line x1="12" y1="16" x2="12.01" y2="16"/>
             </svg>
             <strong>⚠️ Database Connection Issue</strong>
-            <span>{{ db_error or 'Service unavailable' }}</span>
+            <span>{{ db_error or 'Database is currently offline' }}</span>
             <button onclick="this.closest('.db-alert-admin').remove()" title="Dismiss">&times;</button>
         </div>
         {% endif %}
