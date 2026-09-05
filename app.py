@@ -21,6 +21,7 @@ from pywebpush import webpush, WebPushException
 from authlib.integrations.flask_client import OAuth
 import time, logging, re, hmac, hashlib, secrets, base64, struct, datetime, threading, uuid, json
 import requests as _requests
+import sqlite3 as _sqlite3
 
 init_color(convert=True, strip=False)
 logging.basicConfig(level=logging.INFO)
@@ -108,6 +109,122 @@ def _supabase_headers():
 
 def supabase_available():
     return bool(SUPABASE_URL and SUPABASE_SERVICE_KEY)
+
+
+# ── Local SQLite Fallback Database ──
+LOCAL_DB_PATH = os.environ.get("LOCAL_DB_PATH", os.path.join(os.path.dirname(__file__), "local_chat.db"))
+_local_db = None
+_local_db_lock = threading.Lock()
+
+def _get_local_db():
+    """Get or create local SQLite database connection."""
+    global _local_db
+    if _local_db is None:
+        with _local_db_lock:
+            if _local_db is None:
+                _local_db = _sqlite3.connect(LOCAL_DB_PATH, check_same_thread=False)
+                _local_db.row_factory = _sqlite3.Row
+                _init_local_db(_local_db)
+    return _local_db
+
+def _init_local_db(conn):
+    """Initialize local SQLite database with required tables."""
+    cursor = conn.cursor()
+    
+    # chat_profiles
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS chat_profiles (
+            google_id TEXT PRIMARY KEY,
+            email TEXT,
+            display_name TEXT,
+            public_key TEXT,
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    
+    # chat_friends
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS chat_friends (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            owner_google_id TEXT NOT NULL,
+            owner_email TEXT,
+            friend_google_id TEXT,
+            friend_email TEXT,
+            friend_display_name TEXT,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(owner_google_id, friend_google_id)
+        )
+    """)
+    
+    # chat_friend_requests
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS chat_friend_requests (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            sender_google_id TEXT NOT NULL,
+            sender_email TEXT,
+            recipient_google_id TEXT,
+            recipient_email TEXT,
+            status TEXT NOT NULL DEFAULT 'pending',
+            responded_at TEXT,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    
+    # chat_notifications
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS chat_notifications (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            owner_google_id TEXT NOT NULL,
+            kind TEXT NOT NULL,
+            title TEXT NOT NULL,
+            body TEXT,
+            room_code TEXT,
+            read INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    
+    # chat_direct_messages
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS chat_direct_messages (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            dm_room TEXT NOT NULL,
+            sender_google_id TEXT NOT NULL,
+            sender_name TEXT,
+            recipient_google_id TEXT NOT NULL,
+            type TEXT NOT NULL DEFAULT 'text',
+            ciphertext TEXT,
+            client_id TEXT,
+            reply_to TEXT,
+            mime TEXT,
+            duration REAL,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            synced INTEGER NOT NULL DEFAULT 0
+        )
+    """)
+    
+    # pending_sync - messages to sync to Supabase when it comes back
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS pending_sync (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            table_name TEXT NOT NULL,
+            record_id INTEGER NOT NULL,
+            action TEXT NOT NULL DEFAULT 'insert',
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            attempts INTEGER NOT NULL DEFAULT 0
+        )
+    """)
+    
+    conn.commit()
+
+def local_db_available():
+    """Check if local database is available."""
+    try:
+        conn = _get_local_db()
+        conn.execute("SELECT 1")
+        return True
+    except Exception:
+        return False
 
 
 # ── Database Status Check ──
@@ -263,407 +380,500 @@ def verify_totp(secret, code):
 
 # ── Supabase Functions for Friends & DMs ──
 def sb_list_friends(owner_google_id):
-    if not supabase_available() or not owner_google_id:
-        return []
-    try:
-        r = _requests.get(
-            f"{SUPABASE_URL}/rest/v1/chat_friends",
-            headers=_supabase_headers(),
-            params={"owner_google_id": f"eq.{owner_google_id}", "order": "created_at.desc"},
-            timeout=8,
-        )
-        r.raise_for_status()
-        rows = r.json()
-        for f in rows:
-            if not f.get("friend_google_id") and f.get("friend_email"):
-                fgid = sb_find_user_by_email(f["friend_email"])
-                if fgid:
-                    f["friend_google_id"] = fgid
-            if not f.get("friend_display_name"):
-                if f.get("friend_google_id"):
-                    prof = sb_get_profile(f["friend_google_id"])
-                    if prof and prof.get("display_name"):
-                        f["friend_display_name"] = prof["display_name"]
-            if not f.get("friend_display_name") and f.get("friend_email"):
-                f["friend_display_name"] = email_to_name(f["friend_email"])
-        return rows
-    except Exception as e:
-        logging.info(f"Supabase list_friends failed: {e}")
-        return []
+    # Try Supabase first
+    if supabase_available():
+        try:
+            r = _requests.get(
+                f"{SUPABASE_URL}/rest/v1/chat_friends",
+                headers=_supabase_headers(),
+                params={"owner_google_id": f"eq.{owner_google_id}", "order": "created_at.desc"},
+                timeout=8,
+            )
+            r.raise_for_status()
+            rows = r.json()
+            for f in rows:
+                if not f.get("friend_google_id") and f.get("friend_email"):
+                    fgid = sb_find_user_by_email(f["friend_email"])
+                    if fgid:
+                        f["friend_google_id"] = fgid
+                if not f.get("friend_display_name"):
+                    if f.get("friend_google_id"):
+                        prof = sb_get_profile(f["friend_google_id"])
+                        if prof and prof.get("display_name"):
+                            f["friend_display_name"] = prof["display_name"]
+                if not f.get("friend_display_name") and f.get("friend_email"):
+                    f["friend_display_name"] = email_to_name(f["friend_email"])
+            return rows
+        except Exception as e:
+            logging.info(f"Supabase list_friends failed, falling back to local: {e}")
+    
+    # Fallback to local SQLite
+    return lb_list_friends(owner_google_id)
 
 def sb_add_friend(owner_google_id, owner_email, friend_google_id, friend_email, friend_display_name):
-    if not supabase_available():
-        return False, "Storage not configured"
-    try:
-        r = _requests.post(
-            f"{SUPABASE_URL}/rest/v1/chat_friends",
-            headers={**_supabase_headers(), "Prefer": "resolution=merge-duplicates"},
-            json={
-                "owner_google_id": owner_google_id,
-                "owner_email": owner_email,
-                "friend_google_id": friend_google_id,
-                "friend_email": friend_email,
-                "friend_display_name": friend_display_name,
-            },
-            timeout=8,
-        )
-        if r.status_code >= 400:
-            return False, r.text[:200]
-        return True, None
-    except Exception as e:
-        return False, str(e)
+    # Try Supabase first
+    if supabase_available():
+        try:
+            r = _requests.post(
+                f"{SUPABASE_URL}/rest/v1/chat_friends",
+                headers={**_supabase_headers(), "Prefer": "resolution=merge-duplicates"},
+                json={
+                    "owner_google_id": owner_google_id,
+                    "owner_email": owner_email,
+                    "friend_google_id": friend_google_id,
+                    "friend_email": friend_email,
+                    "friend_display_name": friend_display_name,
+                },
+                timeout=8,
+            )
+            if r.status_code < 400:
+                return True, None
+        except Exception as e:
+            logging.info(f"Supabase add_friend failed, falling back to local: {e}")
+    
+    # Fallback to local
+    return lb_add_friend(owner_google_id, owner_email, friend_google_id, friend_email, friend_display_name)
 
 def sb_remove_friend(owner_google_id, friend_google_id):
-    if not supabase_available():
-        return False
-    try:
-        r = _requests.delete(
-            f"{SUPABASE_URL}/rest/v1/chat_friends",
-            headers=_supabase_headers(),
-            params={"owner_google_id": f"eq.{owner_google_id}", "friend_google_id": f"eq.{friend_google_id}"},
-            timeout=8,
-        )
-        return r.status_code < 400
-    except Exception as e:
-        logging.info(f"Supabase remove_friend failed: {e}")
-        return False
+    # Try Supabase first
+    if supabase_available():
+        try:
+            r = _requests.delete(
+                f"{SUPABASE_URL}/rest/v1/chat_friends",
+                headers=_supabase_headers(),
+                params={"owner_google_id": f"eq.{owner_google_id}", "friend_google_id": f"eq.{friend_google_id}"},
+                timeout=8,
+            )
+            if r.status_code < 400:
+                return True
+        except Exception as e:
+            logging.info(f"Supabase remove_friend failed, falling back to local: {e}")
+    
+    # Fallback to local
+    return lb_remove_friend(owner_google_id, friend_google_id)
 
 def sb_find_user_by_email(email):
-    if not supabase_available() or not email:
+    if not email:
         return None
-    try:
-        r = _requests.get(
-            f"{SUPABASE_URL}/rest/v1/chat_profiles",
-            headers=_supabase_headers(),
-            params={"email": f"eq.{email}", "limit": 1},
-            timeout=8,
-        )
-        r.raise_for_status()
-        rows = r.json()
-        if rows:
-            return rows[0]["google_id"]
-    except Exception as e:
-        logging.info(f"Supabase find_user_by_email (profiles) failed: {e}")
-    try:
-        r = _requests.get(
-            f"{SUPABASE_URL}/rest/v1/chat_friends",
-            headers=_supabase_headers(),
-            params={"friend_email": f"eq.{email}", "limit": 1},
-            timeout=8,
-        )
-        r.raise_for_status()
-        rows = r.json()
-        if rows:
-            return rows[0]["friend_google_id"]
-    except Exception as e:
-        logging.info(f"Supabase find_user_by_email (friends) failed: {e}")
-    return None
+    
+    # Try Supabase first
+    if supabase_available():
+        try:
+            r = _requests.get(
+                f"{SUPABASE_URL}/rest/v1/chat_profiles",
+                headers=_supabase_headers(),
+                params={"email": f"eq.{email}", "limit": 1},
+                timeout=8,
+            )
+            r.raise_for_status()
+            rows = r.json()
+            if rows:
+                return rows[0]["google_id"]
+        except Exception as e:
+            logging.info(f"Supabase find_user_by_email (profiles) failed: {e}")
+        try:
+            r = _requests.get(
+                f"{SUPABASE_URL}/rest/v1/chat_friends",
+                headers=_supabase_headers(),
+                params={"friend_email": f"eq.{email}", "limit": 1},
+                timeout=8,
+            )
+            r.raise_for_status()
+            rows = r.json()
+            if rows:
+                return rows[0]["friend_google_id"]
+        except Exception as e:
+            logging.info(f"Supabase find_user_by_email (friends) failed: {e}")
+    
+    # Fallback to local
+    return lb_find_user_by_email(email)
 
 def sb_get_profile(google_id):
-    if not supabase_available() or not google_id:
+    if not google_id:
         return None
-    try:
-        r = _requests.get(
-            f"{SUPABASE_URL}/rest/v1/chat_profiles",
-            headers=_supabase_headers(),
-            params={"google_id": f"eq.{google_id}", "limit": 1},
-            timeout=8,
-        )
-        r.raise_for_status()
-        rows = r.json()
-        return rows[0] if rows else None
-    except Exception as e:
-        logging.info(f"Supabase get_profile failed: {e}")
-        return None
+    
+    # Try Supabase first
+    if supabase_available():
+        try:
+            r = _requests.get(
+                f"{SUPABASE_URL}/rest/v1/chat_profiles",
+                headers=_supabase_headers(),
+                params={"google_id": f"eq.{google_id}", "limit": 1},
+                timeout=8,
+            )
+            r.raise_for_status()
+            rows = r.json()
+            if rows:
+                return rows[0]
+        except Exception as e:
+            logging.info(f"Supabase get_profile failed, falling back to local: {e}")
+    
+    # Fallback to local
+    return lb_get_profile(google_id)
 
 def sb_upsert_profile(google_id, email, display_name):
-    if not supabase_available():
-        return False, "Storage not configured"
-    try:
-        r = _requests.post(
-            f"{SUPABASE_URL}/rest/v1/chat_profiles",
-            headers={**_supabase_headers(), "Prefer": "resolution=merge-duplicates"},
-            json={
-                "google_id": google_id,
-                "email": email,
-                "display_name": display_name,
-                "updated_at": datetime.datetime.utcnow().isoformat(),
-            },
-            timeout=8,
-        )
-        if r.status_code >= 400:
-            return False, r.text[:200]
-        return True, None
-    except Exception as e:
-        return False, str(e)
+    if not google_id:
+        return False, "No Google ID"
+    
+    # Try Supabase first
+    if supabase_available():
+        try:
+            r = _requests.post(
+                f"{SUPABASE_URL}/rest/v1/chat_profiles",
+                headers={**_supabase_headers(), "Prefer": "resolution=merge-duplicates"},
+                json={
+                    "google_id": google_id,
+                    "email": email,
+                    "display_name": display_name,
+                    "updated_at": datetime.datetime.utcnow().isoformat(),
+                },
+                timeout=8,
+            )
+            if r.status_code < 400:
+                return True, None
+        except Exception as e:
+            logging.info(f"Supabase upsert_profile failed, falling back to local: {e}")
+    
+    # Fallback to local
+    return lb_upsert_profile(google_id, email, display_name)
 
 def sb_set_public_key(google_id, public_key_b64):
-    if not supabase_available() or not google_id or not public_key_b64:
+    if not google_id or not public_key_b64:
         return False
-    try:
-        r = _requests.post(
-            f"{SUPABASE_URL}/rest/v1/chat_profiles",
-            headers={**_supabase_headers(), "Prefer": "resolution=merge-duplicates"},
-            json={
-                "google_id": google_id,
-                "public_key": public_key_b64,
-                "updated_at": datetime.datetime.utcnow().isoformat(),
-            },
-            timeout=8,
-        )
-        return r.status_code < 400
-    except Exception as e:
-        logging.info(f"Supabase set_public_key failed: {e}")
-        return False
+    
+    # Try Supabase first
+    if supabase_available():
+        try:
+            r = _requests.post(
+                f"{SUPABASE_URL}/rest/v1/chat_profiles",
+                headers={**_supabase_headers(), "Prefer": "resolution=merge-duplicates"},
+                json={
+                    "google_id": google_id,
+                    "public_key": public_key_b64,
+                    "updated_at": datetime.datetime.utcnow().isoformat(),
+                },
+                timeout=8,
+            )
+            if r.status_code < 400:
+                return True
+        except Exception as e:
+            logging.info(f"Supabase set_public_key failed, falling back to local: {e}")
+    
+    # Fallback to local
+    return lb_set_public_key(google_id, public_key_b64)
 
 def sb_get_public_key(google_id):
     prof = sb_get_profile(google_id)
     return (prof or {}).get("public_key")
 
 def sb_is_friend(owner_google_id, other_google_id):
-    if not supabase_available() or not owner_google_id or not other_google_id:
+    if not owner_google_id or not other_google_id:
         return False
     if str(owner_google_id) == str(other_google_id):
         return False
-    try:
-        r = _requests.get(
-            f"{SUPABASE_URL}/rest/v1/chat_friends",
-            headers=_supabase_headers(),
-            params={
-                "owner_google_id": f"eq.{owner_google_id}",
-                "friend_google_id": f"eq.{other_google_id}",
-                "limit": 1,
-            },
-            timeout=8,
-        )
-        r.raise_for_status()
-        if r.json():
-            return True
-    except Exception as e:
-        logging.info(f"Supabase is_friend check failed: {e}")
-    try:
-        r = _requests.get(
-            f"{SUPABASE_URL}/rest/v1/chat_friends",
-            headers=_supabase_headers(),
-            params={
-                "owner_google_id": f"eq.{other_google_id}",
-                "friend_google_id": f"eq.{owner_google_id}",
-                "limit": 1,
-            },
-            timeout=8,
-        )
-        r.raise_for_status()
-        return bool(r.json())
-    except Exception as e:
-        logging.info(f"Supabase is_friend reverse check failed: {e}")
-        return False
+    
+    # Try Supabase first
+    if supabase_available():
+        try:
+            r = _requests.get(
+                f"{SUPABASE_URL}/rest/v1/chat_friends",
+                headers=_supabase_headers(),
+                params={
+                    "owner_google_id": f"eq.{owner_google_id}",
+                    "friend_google_id": f"eq.{other_google_id}",
+                    "limit": 1,
+                },
+                timeout=8,
+            )
+            r.raise_for_status()
+            if r.json():
+                return True
+        except Exception as e:
+            logging.info(f"Supabase is_friend check failed: {e}")
+        try:
+            r = _requests.get(
+                f"{SUPABASE_URL}/rest/v1/chat_friends",
+                headers=_supabase_headers(),
+                params={
+                    "owner_google_id": f"eq.{other_google_id}",
+                    "friend_google_id": f"eq.{owner_google_id}",
+                    "limit": 1,
+                },
+                timeout=8,
+            )
+            r.raise_for_status()
+            if r.json():
+                return True
+        except Exception as e:
+            logging.info(f"Supabase is_friend reverse check failed, falling back to local: {e}")
+    
+    # Fallback to local
+    return lb_is_friend(owner_google_id, other_google_id)
 
 def sb_save_direct_message(dm_room, sender_gid, sender_name, recipient_gid, mtype, ciphertext,
                             client_id=None, reply_to=None, mime=None, duration=None):
-    if not supabase_available():
+    if not dm_room or not sender_gid or not recipient_gid:
         return False
-    try:
-        payload = {
-            "dm_room": dm_room,
-            "sender_google_id": sender_gid,
-            "sender_name": sender_name,
-            "recipient_google_id": recipient_gid,
-            "type": mtype,
-            "ciphertext": ciphertext,
-            "client_id": client_id,
-            "reply_to": reply_to,
-            "mime": mime,
-            "duration": duration,
-        }
-        r = _requests.post(
-            f"{SUPABASE_URL}/rest/v1/chat_direct_messages",
-            headers=_supabase_headers(),
-            json=payload,
-            timeout=8,
-        )
-        return r.status_code < 400
-    except Exception as e:
-        logging.info(f"Supabase save_direct_message failed: {e}")
-        return False
+    
+    # Try Supabase first
+    if supabase_available():
+        try:
+            payload = {
+                "dm_room": dm_room,
+                "sender_google_id": sender_gid,
+                "sender_name": sender_name,
+                "recipient_google_id": recipient_gid,
+                "type": mtype,
+                "ciphertext": ciphertext,
+                "client_id": client_id,
+                "reply_to": reply_to,
+                "mime": mime,
+                "duration": duration,
+            }
+            r = _requests.post(
+                f"{SUPABASE_URL}/rest/v1/chat_direct_messages",
+                headers=_supabase_headers(),
+                json=payload,
+                timeout=8,
+            )
+            if r.status_code < 400:
+                return True
+        except Exception as e:
+            logging.info(f"Supabase save_direct_message failed, falling back to local: {e}")
+    
+    # Fallback to local
+    return lb_save_direct_message(dm_room, sender_gid, sender_name, recipient_gid, mtype, ciphertext,
+                                  client_id, reply_to, mime, duration)
 
 def sb_list_direct_messages(dm_room, limit=100):
-    if not supabase_available() or not dm_room:
+    if not dm_room:
         return []
-    try:
-        r = _requests.get(
-            f"{SUPABASE_URL}/rest/v1/chat_direct_messages",
-            headers=_supabase_headers(),
-            params={
-                "dm_room": f"eq.{dm_room}",
-                "order": "created_at.asc",
-                "limit": limit,
-            },
-            timeout=8,
-        )
-        r.raise_for_status()
-        return r.json()
-    except Exception as e:
-        logging.info(f"Supabase list_direct_messages failed: {e}")
-        return []
+    
+    # Try Supabase first
+    if supabase_available():
+        try:
+            r = _requests.get(
+                f"{SUPABASE_URL}/rest/v1/chat_direct_messages",
+                headers=_supabase_headers(),
+                params={
+                    "dm_room": f"eq.{dm_room}",
+                    "order": "created_at.asc",
+                    "limit": limit,
+                },
+                timeout=8,
+            )
+            r.raise_for_status()
+            return r.json()
+        except Exception as e:
+            logging.info(f"Supabase list_direct_messages failed, falling back to local: {e}")
+    
+    # Fallback to local
+    return lb_list_direct_messages(dm_room, limit)
 
 
 # ── Friend Requests ──
 def sb_create_friend_request(sender_gid, sender_email, recipient_email, recipient_gid=None):
-    if not supabase_available():
-        return False, "Storage not configured"
-    try:
-        r = _requests.post(
-            f"{SUPABASE_URL}/rest/v1/chat_friend_requests",
-            headers=_supabase_headers(),
-            json={
-                "sender_google_id": sender_gid,
-                "sender_email": sender_email,
-                "recipient_google_id": recipient_gid,
-                "recipient_email": recipient_email,
-                "status": "pending",
-            },
-            timeout=8,
-        )
-        if r.status_code >= 400:
-            if r.status_code == 409 or "duplicate" in r.text.lower():
+    if not sender_gid:
+        return False, "No sender Google ID"
+    
+    # Try Supabase first
+    if supabase_available():
+        try:
+            r = _requests.post(
+                f"{SUPABASE_URL}/rest/v1/chat_friend_requests",
+                headers=_supabase_headers(),
+                json={
+                    "sender_google_id": sender_gid,
+                    "sender_email": sender_email,
+                    "recipient_google_id": recipient_gid,
+                    "recipient_email": recipient_email,
+                    "status": "pending",
+                },
+                timeout=8,
+            )
+            if r.status_code < 400:
+                return True, None
+            elif r.status_code == 409 or "duplicate" in r.text.lower():
                 return False, "You already have a pending request to this person."
-            if "schema cache" in r.text.lower() or "could not find the table" in r.text.lower():
+            elif "schema cache" in r.text.lower() or "could not find the table" in r.text.lower():
                 return False, "Database table 'chat_friend_requests' is not created in Supabase yet."
-            return False, r.text[:200]
-        return True, None
-    except Exception as e:
-        return False, str(e)
+            else:
+                return False, r.text[:200]
+        except Exception as e:
+            logging.info(f"Supabase create_friend_request failed, falling back to local: {e}")
+    
+    # Fallback to local
+    return lb_create_friend_request(sender_gid, sender_email, recipient_email, recipient_gid)
 
 def sb_list_incoming_requests(recipient_gid, status="pending"):
-    if not supabase_available() or not recipient_gid:
+    if not recipient_gid:
         return []
-    try:
-        r = _requests.get(
-            f"{SUPABASE_URL}/rest/v1/chat_friend_requests",
-            headers=_supabase_headers(),
-            params={
-                "recipient_google_id": f"eq.{recipient_gid}",
-                "status": f"eq.{status}",
-                "order": "created_at.desc",
-            },
-            timeout=8,
-        )
-        r.raise_for_status()
-        return r.json()
-    except Exception as e:
-        logging.info(f"Supabase list_incoming_requests failed: {e}")
-        return []
+    
+    # Try Supabase first
+    if supabase_available():
+        try:
+            r = _requests.get(
+                f"{SUPABASE_URL}/rest/v1/chat_friend_requests",
+                headers=_supabase_headers(),
+                params={
+                    "recipient_google_id": f"eq.{recipient_gid}",
+                    "status": f"eq.{status}",
+                    "order": "created_at.desc",
+                },
+                timeout=8,
+            )
+            r.raise_for_status()
+            return r.json()
+        except Exception as e:
+            logging.info(f"Supabase list_incoming_requests failed, falling back to local: {e}")
+    
+    # Fallback to local
+    return lb_list_incoming_requests(recipient_gid, status)
 
 def sb_list_outgoing_requests(sender_gid, status="pending"):
-    if not supabase_available() or not sender_gid:
+    if not sender_gid:
         return []
-    try:
-        r = _requests.get(
-            f"{SUPABASE_URL}/rest/v1/chat_friend_requests",
-            headers=_supabase_headers(),
-            params={
-                "sender_google_id": f"eq.{sender_gid}",
-                "status": f"eq.{status}",
-                "order": "created_at.desc",
-            },
-            timeout=8,
-        )
-        r.raise_for_status()
-        return r.json()
-    except Exception as e:
-        logging.info(f"Supabase list_outgoing_requests failed: {e}")
-        return []
+    
+    # Try Supabase first
+    if supabase_available():
+        try:
+            r = _requests.get(
+                f"{SUPABASE_URL}/rest/v1/chat_friend_requests",
+                headers=_supabase_headers(),
+                params={
+                    "sender_google_id": f"eq.{sender_gid}",
+                    "status": f"eq.{status}",
+                    "order": "created_at.desc",
+                },
+                timeout=8,
+            )
+            r.raise_for_status()
+            return r.json()
+        except Exception as e:
+            logging.info(f"Supabase list_outgoing_requests failed, falling back to local: {e}")
+    
+    # Fallback to local
+    return lb_list_outgoing_requests(sender_gid, status)
 
 def sb_get_friend_request(request_id):
-    if not supabase_available():
+    if not request_id:
         return None
-    try:
-        r = _requests.get(
-            f"{SUPABASE_URL}/rest/v1/chat_friend_requests",
-            headers=_supabase_headers(),
-            params={"id": f"eq.{request_id}", "limit": 1},
-            timeout=8,
-        )
-        r.raise_for_status()
-        rows = r.json()
-        return rows[0] if rows else None
-    except Exception as e:
-        logging.info(f"Supabase get_friend_request failed: {e}")
-        return None
+    
+    # Try Supabase first
+    if supabase_available():
+        try:
+            r = _requests.get(
+                f"{SUPABASE_URL}/rest/v1/chat_friend_requests",
+                headers=_supabase_headers(),
+                params={"id": f"eq.{request_id}", "limit": 1},
+                timeout=8,
+            )
+            r.raise_for_status()
+            rows = r.json()
+            if rows:
+                return rows[0]
+        except Exception as e:
+            logging.info(f"Supabase get_friend_request failed, falling back to local: {e}")
+    
+    # Fallback to local
+    return lb_get_friend_request(request_id)
 
 def sb_respond_friend_request(request_id, status):
-    if not supabase_available():
+    if not request_id:
         return False
-    try:
-        r = _requests.patch(
-            f"{SUPABASE_URL}/rest/v1/chat_friend_requests",
-            headers=_supabase_headers(),
-            params={"id": f"eq.{request_id}"},
-            json={"status": status, "responded_at": datetime.datetime.utcnow().isoformat()},
-            timeout=8,
-        )
-        return r.status_code < 400
-    except Exception as e:
-        logging.info(f"Supabase respond_friend_request failed: {e}")
-        return False
+    
+    # Try Supabase first
+    if supabase_available():
+        try:
+            r = _requests.patch(
+                f"{SUPABASE_URL}/rest/v1/chat_friend_requests",
+                headers=_supabase_headers(),
+                params={"id": f"eq.{request_id}"},
+                json={"status": status, "responded_at": datetime.datetime.utcnow().isoformat()},
+                timeout=8,
+            )
+            if r.status_code < 400:
+                return True
+        except Exception as e:
+            logging.info(f"Supabase respond_friend_request failed, falling back to local: {e}")
+    
+    # Fallback to local
+    return lb_respond_friend_request(request_id, status)
 
 def sb_cancel_friend_request(request_id, sender_gid):
-    if not supabase_available():
+    if not request_id:
         return False
-    try:
-        r = _requests.delete(
-            f"{SUPABASE_URL}/rest/v1/chat_friend_requests",
-            headers=_supabase_headers(),
-            params={"id": f"eq.{request_id}", "sender_google_id": f"eq.{sender_gid}", "status": "eq.pending"},
-            timeout=8,
-        )
-        return r.status_code < 400
-    except Exception as e:
-        logging.info(f"Supabase cancel_friend_request failed: {e}")
-        return False
+    
+    # Try Supabase first
+    if supabase_available():
+        try:
+            r = _requests.delete(
+                f"{SUPABASE_URL}/rest/v1/chat_friend_requests",
+                headers=_supabase_headers(),
+                params={"id": f"eq.{request_id}", "sender_google_id": f"eq.{sender_gid}", "status": "eq.pending"},
+                timeout=8,
+            )
+            if r.status_code < 400:
+                return True
+        except Exception as e:
+            logging.info(f"Supabase cancel_friend_request failed, falling back to local: {e}")
+    
+    # Fallback to local
+    return lb_cancel_friend_request(request_id, sender_gid)
 
 
 # ── Notifications ──
 def sb_add_notification(owner_google_id, kind, title, body="", room_code=None):
-    if not supabase_available() or not owner_google_id:
+    if not owner_google_id:
         return False
-    try:
-        r = _requests.post(
-            f"{SUPABASE_URL}/rest/v1/chat_notifications",
-            headers=_supabase_headers(),
-            json={
-                "owner_google_id": owner_google_id,
-                "kind": kind,
-                "title": title[:200],
-                "body": (body or "")[:500],
-                "room_code": room_code,
-            },
-            timeout=8,
-        )
-        return r.status_code < 400
-    except Exception as e:
-        logging.info(f"Supabase add_notification failed: {e}")
-        return False
+    
+    # Try Supabase first
+    if supabase_available():
+        try:
+            r = _requests.post(
+                f"{SUPABASE_URL}/rest/v1/chat_notifications",
+                headers=_supabase_headers(),
+                json={
+                    "owner_google_id": owner_google_id,
+                    "kind": kind,
+                    "title": title[:200],
+                    "body": (body or "")[:500],
+                    "room_code": room_code,
+                },
+                timeout=8,
+            )
+            if r.status_code < 400:
+                return True
+        except Exception as e:
+            logging.info(f"Supabase add_notification failed, falling back to local: {e}")
+    
+    # Fallback to local
+    return lb_add_notification(owner_google_id, kind, title, body, room_code)
 
 def sb_list_notifications(owner_google_id, limit=30):
-    if not supabase_available() or not owner_google_id:
+    if not owner_google_id:
         return []
-    try:
-        r = _requests.get(
-            f"{SUPABASE_URL}/rest/v1/chat_notifications",
-            headers=_supabase_headers(),
-            params={
-                "owner_google_id": f"eq.{owner_google_id}",
-                "order": "created_at.desc",
-                "limit": limit,
-            },
-            timeout=8,
-        )
-        r.raise_for_status()
-        return r.json()
-    except Exception as e:
-        logging.info(f"Supabase list_notifications failed: {e}")
-        return []
+    
+    # Try Supabase first
+    if supabase_available():
+        try:
+            r = _requests.get(
+                f"{SUPABASE_URL}/rest/v1/chat_notifications",
+                headers=_supabase_headers(),
+                params={
+                    "owner_google_id": f"eq.{owner_google_id}",
+                    "order": "created_at.desc",
+                    "limit": limit,
+                },
+                timeout=8,
+            )
+            r.raise_for_status()
+            return r.json()
+        except Exception as e:
+            logging.info(f"Supabase list_notifications failed, falling back to local: {e}")
+    
+    # Fallback to local
+    return lb_list_notifications(owner_google_id, limit)
 
 def sb_unread_notification_count(owner_google_id):
     if not supabase_available() or not owner_google_id:
@@ -686,20 +896,692 @@ def sb_unread_notification_count(owner_google_id):
         return 0
 
 def sb_mark_notifications_read(owner_google_id):
-    if not supabase_available() or not owner_google_id:
+    if not owner_google_id:
+        return False
+    
+    # Try Supabase first
+    if supabase_available():
+        try:
+            r = _requests.patch(
+                f"{SUPABASE_URL}/rest/v1/chat_notifications",
+                headers=_supabase_headers(),
+                params={"owner_google_id": f"eq.{owner_google_id}", "read": "eq.false"},
+                json={"read": True},
+                timeout=8,
+            )
+            if r.status_code < 400:
+                return True
+        except Exception as e:
+            logging.info(f"Supabase mark_notifications_read failed, falling back to local: {e}")
+    
+    # Fallback to local
+    return lb_mark_notifications_read(owner_google_id)
+
+
+# ── Local Database Functions (Fallback) ──
+def lb_list_friends(owner_google_id):
+    """Local SQLite fallback for listing friends."""
+    if not owner_google_id:
+        return []
+    try:
+        conn = _get_local_db()
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT * FROM chat_friends WHERE owner_google_id = ? ORDER BY created_at DESC",
+            (owner_google_id,)
+        )
+        rows = [dict(r) for r in cursor.fetchall()]
+        for f in rows:
+            if not f.get("friend_display_name") and f.get("friend_email"):
+                f["friend_display_name"] = email_to_name(f["friend_email"])
+        return rows
+    except Exception as e:
+        logging.info(f"Local DB list_friends failed: {e}")
+        return []
+
+
+def lb_add_friend(owner_google_id, owner_email, friend_google_id, friend_email, friend_display_name):
+    """Local SQLite fallback for adding friend."""
+    if not owner_google_id:
+        return False, "No owner Google ID"
+    try:
+        conn = _get_local_db()
+        cursor = conn.cursor()
+        cursor.execute(
+            """INSERT OR IGNORE INTO chat_friends 
+               (owner_google_id, owner_email, friend_google_id, friend_email, friend_display_name)
+               VALUES (?, ?, ?, ?, ?)""",
+            (owner_google_id, owner_email, friend_google_id, friend_email, friend_display_name)
+        )
+        conn.commit()
+        
+        # Mark for sync to Supabase
+        cursor.execute(
+            "INSERT INTO pending_sync (table_name, record_id, action) VALUES (?, ?, ?)",
+            ("chat_friends", cursor.lastrowid, "insert")
+        )
+        conn.commit()
+        return True, None
+    except Exception as e:
+        logging.info(f"Local DB add_friend failed: {e}")
+        return False, str(e)
+
+
+def lb_remove_friend(owner_google_id, friend_google_id):
+    """Local SQLite fallback for removing friend."""
+    if not owner_google_id or not friend_google_id:
         return False
     try:
-        r = _requests.patch(
-            f"{SUPABASE_URL}/rest/v1/chat_notifications",
-            headers=_supabase_headers(),
-            params={"owner_google_id": f"eq.{owner_google_id}", "read": "eq.false"},
-            json={"read": True},
-            timeout=8,
+        conn = _get_local_db()
+        cursor = conn.cursor()
+        cursor.execute(
+            "DELETE FROM chat_friends WHERE owner_google_id = ? AND friend_google_id = ?",
+            (owner_google_id, friend_google_id)
         )
-        return r.status_code < 400
+        conn.commit()
+        
+        if cursor.rowcount > 0:
+            cursor.execute(
+                "INSERT INTO pending_sync (table_name, record_id, action) VALUES (?, ?, ?)",
+                ("chat_friends", friend_google_id, "delete")
+            )
+            conn.commit()
+        return True
     except Exception as e:
-        logging.info(f"Supabase mark_notifications_read failed: {e}")
+        logging.info(f"Local DB remove_friend failed: {e}")
         return False
+
+
+def lb_find_user_by_email(email):
+    """Local SQLite fallback for finding user by email."""
+    if not email:
+        return None
+    try:
+        conn = _get_local_db()
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT google_id FROM chat_profiles WHERE email = ? LIMIT 1",
+            (email.lower(),)
+        )
+        row = cursor.fetchone()
+        if row:
+            return row["google_id"]
+        
+        # Also check friends table
+        cursor.execute(
+            "SELECT friend_google_id FROM chat_friends WHERE friend_email = ? LIMIT 1",
+            (email.lower(),)
+        )
+        row = cursor.fetchone()
+        return row["friend_google_id"] if row else None
+    except Exception as e:
+        logging.info(f"Local DB find_user_by_email failed: {e}")
+        return None
+
+
+def lb_get_profile(google_id):
+    """Local SQLite fallback for getting profile."""
+    if not google_id:
+        return None
+    try:
+        conn = _get_local_db()
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT * FROM chat_profiles WHERE google_id = ? LIMIT 1",
+            (google_id,)
+        )
+        row = cursor.fetchone()
+        return dict(row) if row else None
+    except Exception as e:
+        logging.info(f"Local DB get_profile failed: {e}")
+        return None
+
+
+def lb_upsert_profile(google_id, email, display_name):
+    """Local SQLite fallback for upserting profile."""
+    if not google_id:
+        return False, "No Google ID"
+    try:
+        conn = _get_local_db()
+        cursor = conn.cursor()
+        cursor.execute(
+            """INSERT INTO chat_profiles (google_id, email, display_name, updated_at)
+               VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+               ON CONFLICT(google_id) DO UPDATE SET 
+                 email = excluded.email, 
+                 display_name = excluded.display_name,
+                 updated_at = CURRENT_TIMESTAMP""",
+            (google_id, email, display_name)
+        )
+        conn.commit()
+        
+        cursor.execute(
+            "INSERT INTO pending_sync (table_name, record_id, action) VALUES (?, ?, ?)",
+            ("chat_profiles", google_id, "upsert")
+        )
+        conn.commit()
+        return True, None
+    except Exception as e:
+        logging.info(f"Local DB upsert_profile failed: {e}")
+        return False, str(e)
+
+
+def lb_set_public_key(google_id, public_key_b64):
+    """Local SQLite fallback for setting public key."""
+    if not google_id or not public_key_b64:
+        return False
+    try:
+        conn = _get_local_db()
+        cursor = conn.cursor()
+        cursor.execute(
+            "UPDATE chat_profiles SET public_key = ?, updated_at = CURRENT_TIMESTAMP WHERE google_id = ?",
+            (public_key_b64, google_id)
+        )
+        conn.commit()
+        
+        if cursor.rowcount > 0:
+            cursor.execute(
+                "INSERT INTO pending_sync (table_name, record_id, action) VALUES (?, ?, ?)",
+                ("chat_profiles", google_id, "update")
+            )
+            conn.commit()
+        return True
+    except Exception as e:
+        logging.info(f"Local DB set_public_key failed: {e}")
+        return False
+
+
+def lb_get_public_key(google_id):
+    """Local SQLite fallback for getting public key."""
+    profile = lb_get_profile(google_id)
+    return (profile or {}).get("public_key")
+
+
+def lb_is_friend(owner_google_id, other_google_id):
+    """Local SQLite fallback for checking friendship."""
+    if not owner_google_id or not other_google_id:
+        return False
+    if str(owner_google_id) == str(other_google_id):
+        return False
+    try:
+        conn = _get_local_db()
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT 1 FROM chat_friends WHERE owner_google_id = ? AND friend_google_id = ? LIMIT 1",
+            (owner_google_id, other_google_id)
+        )
+        if cursor.fetchone():
+            return True
+        cursor.execute(
+            "SELECT 1 FROM chat_friends WHERE owner_google_id = ? AND friend_google_id = ? LIMIT 1",
+            (other_google_id, owner_google_id)
+        )
+        return cursor.fetchone() is not None
+    except Exception as e:
+        logging.info(f"Local DB is_friend failed: {e}")
+        return False
+
+
+def lb_save_direct_message(dm_room, sender_gid, sender_name, recipient_gid, mtype, ciphertext,
+                            client_id=None, reply_to=None, mime=None, duration=None):
+    """Local SQLite fallback for saving direct message."""
+    try:
+        conn = _get_local_db()
+        cursor = conn.cursor()
+        cursor.execute(
+            """INSERT INTO chat_direct_messages 
+               (dm_room, sender_google_id, sender_name, recipient_google_id, type, ciphertext, 
+                client_id, reply_to, mime, duration, created_at, synced)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, 0)""",
+            (dm_room, sender_gid, sender_name, recipient_gid, mtype, ciphertext,
+             client_id, reply_to, mime, duration)
+        )
+        conn.commit()
+        
+        cursor.execute(
+            "INSERT INTO pending_sync (table_name, record_id, action) VALUES (?, ?, ?)",
+            ("chat_direct_messages", cursor.lastrowid, "insert")
+        )
+        conn.commit()
+        return True
+    except Exception as e:
+        logging.info(f"Local DB save_direct_message failed: {e}")
+        return False
+
+
+def lb_list_direct_messages(dm_room, limit=100):
+    """Local SQLite fallback for listing direct messages."""
+    if not dm_room:
+        return []
+    try:
+        conn = _get_local_db()
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT * FROM chat_direct_messages WHERE dm_room = ? ORDER BY created_at ASC LIMIT ?",
+            (dm_room, limit)
+        )
+        return [dict(r) for r in cursor.fetchall()]
+    except Exception as e:
+        logging.info(f"Local DB list_direct_messages failed: {e}")
+        return []
+
+
+# ── Friend Requests - Local Fallback ──
+def lb_create_friend_request(sender_gid, sender_email, recipient_email, recipient_gid=None):
+    """Local SQLite fallback for creating friend request."""
+    if not sender_gid:
+        return False, "No sender Google ID"
+    try:
+        conn = _get_local_db()
+        cursor = conn.cursor()
+        cursor.execute(
+            """INSERT INTO chat_friend_requests 
+               (sender_google_id, sender_email, recipient_google_id, recipient_email, status)
+               VALUES (?, ?, ?, ?, 'pending')""",
+            (sender_gid, sender_email, recipient_gid, recipient_email)
+        )
+        conn.commit()
+        
+        cursor.execute(
+            "INSERT INTO pending_sync (table_name, record_id, action) VALUES (?, ?, ?)",
+            ("chat_friend_requests", cursor.lastrowid, "insert")
+        )
+        conn.commit()
+        return True, None
+    except Exception as e:
+        logging.info(f"Local DB create_friend_request failed: {e}")
+        return False, str(e)
+
+
+def lb_list_incoming_requests(recipient_gid, status="pending"):
+    """Local SQLite fallback for listing incoming friend requests."""
+    if not recipient_gid:
+        return []
+    try:
+        conn = _get_local_db()
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT * FROM chat_friend_requests WHERE recipient_google_id = ? AND status = ? ORDER BY created_at DESC",
+            (recipient_gid, status)
+        )
+        return [dict(r) for r in cursor.fetchall()]
+    except Exception as e:
+        logging.info(f"Local DB list_incoming_requests failed: {e}")
+        return []
+
+
+def lb_list_outgoing_requests(sender_gid, status="pending"):
+    """Local SQLite fallback for listing outgoing friend requests."""
+    if not sender_gid:
+        return []
+    try:
+        conn = _get_local_db()
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT * FROM chat_friend_requests WHERE sender_google_id = ? AND status = ? ORDER BY created_at DESC",
+            (sender_gid, status)
+        )
+        return [dict(r) for r in cursor.fetchall()]
+    except Exception as e:
+        logging.info(f"Local DB list_outgoing_requests failed: {e}")
+        return []
+
+
+def lb_get_friend_request(request_id):
+    """Local SQLite fallback for getting friend request."""
+    if not request_id:
+        return None
+    try:
+        conn = _get_local_db()
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT * FROM chat_friend_requests WHERE id = ? LIMIT 1",
+            (int(request_id),)
+        )
+        row = cursor.fetchone()
+        return dict(row) if row else None
+    except Exception as e:
+        logging.info(f"Local DB get_friend_request failed: {e}")
+        return None
+
+
+def lb_respond_friend_request(request_id, status):
+    """Local SQLite fallback for responding to friend request."""
+    if not request_id:
+        return False
+    try:
+        conn = _get_local_db()
+        cursor = conn.cursor()
+        cursor.execute(
+            "UPDATE chat_friend_requests SET status = ?, responded_at = CURRENT_TIMESTAMP WHERE id = ?",
+            (status, int(request_id))
+        )
+        conn.commit()
+        
+        if cursor.rowcount > 0:
+            cursor.execute(
+                "INSERT INTO pending_sync (table_name, record_id, action) VALUES (?, ?, ?)",
+                ("chat_friend_requests", int(request_id), "update")
+            )
+            conn.commit()
+        return True
+    except Exception as e:
+        logging.info(f"Local DB respond_friend_request failed: {e}")
+        return False
+
+
+def lb_cancel_friend_request(request_id, sender_gid):
+    """Local SQLite fallback for canceling friend request."""
+    if not request_id:
+        return False
+    try:
+        conn = _get_local_db()
+        cursor = conn.cursor()
+        cursor.execute(
+            "DELETE FROM chat_friend_requests WHERE id = ? AND sender_google_id = ? AND status = 'pending'",
+            (int(request_id), sender_gid)
+        )
+        conn.commit()
+        
+        if cursor.rowcount > 0:
+            cursor.execute(
+                "INSERT INTO pending_sync (table_name, record_id, action) VALUES (?, ?, ?)",
+                ("chat_friend_requests", int(request_id), "delete")
+            )
+            conn.commit()
+        return True
+    except Exception as e:
+        logging.info(f"Local DB cancel_friend_request failed: {e}")
+        return False
+
+
+# ── Notifications - Local Fallback ──
+def lb_add_notification(owner_google_id, kind, title, body="", room_code=None):
+    """Local SQLite fallback for adding notification."""
+    if not owner_google_id:
+        return False
+    try:
+        conn = _get_local_db()
+        cursor = conn.cursor()
+        cursor.execute(
+            """INSERT INTO chat_notifications 
+               (owner_google_id, kind, title, body, room_code, read, created_at)
+               VALUES (?, ?, ?, ?, ?, 0, CURRENT_TIMESTAMP)""",
+            (owner_google_id, kind, title[:200], (body or "")[:500], room_code)
+        )
+        conn.commit()
+        
+        cursor.execute(
+            "INSERT INTO pending_sync (table_name, record_id, action) VALUES (?, ?, ?)",
+            ("chat_notifications", cursor.lastrowid, "insert")
+        )
+        conn.commit()
+        return True
+    except Exception as e:
+        logging.info(f"Local DB add_notification failed: {e}")
+        return False
+
+
+def lb_list_notifications(owner_google_id, limit=30):
+    """Local SQLite fallback for listing notifications."""
+    if not owner_google_id:
+        return []
+    try:
+        conn = _get_local_db()
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT * FROM chat_notifications WHERE owner_google_id = ? ORDER BY created_at DESC LIMIT ?",
+            (owner_google_id, limit)
+        )
+        return [dict(r) for r in cursor.fetchall()]
+    except Exception as e:
+        logging.info(f"Local DB list_notifications failed: {e}")
+        return []
+
+
+def lb_mark_notifications_read(owner_google_id):
+    """Local SQLite fallback for marking notifications as read."""
+    if not owner_google_id:
+        return False
+    try:
+        conn = _get_local_db()
+        cursor = conn.cursor()
+        cursor.execute(
+            "UPDATE chat_notifications SET read = 1 WHERE owner_google_id = ? AND read = 0",
+            (owner_google_id,)
+        )
+        conn.commit()
+        
+        if cursor.rowcount > 0:
+            cursor.execute(
+                "INSERT INTO pending_sync (table_name, record_id, action) VALUES (?, ?, ?)",
+                ("chat_notifications", owner_google_id, "update")
+            )
+            conn.commit()
+        return True
+    except Exception as e:
+        logging.info(f"Local DB mark_notifications_read failed: {e}")
+        return False
+
+
+def lb_unread_notification_count(owner_google_id):
+    """Local SQLite fallback for counting unread notifications."""
+    if not owner_google_id:
+        return 0
+    try:
+        conn = _get_local_db()
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT COUNT(*) as cnt FROM chat_notifications WHERE owner_google_id = ? AND read = 0",
+            (owner_google_id,)
+        )
+        row = cursor.fetchone()
+        return row["cnt"] if row else 0
+    except Exception as e:
+        logging.info(f"Local DB unread_notification_count failed: {e}")
+        return 0
+
+
+# ── Sync Functions ──
+def sync_pending_to_supabase():
+    """Sync all pending local changes to Supabase when it comes back online."""
+    if not supabase_available():
+        return False
+    
+    conn = _get_local_db()
+    cursor = conn.cursor()
+    
+    cursor.execute("SELECT * FROM pending_sync ORDER BY created_at ASC LIMIT 50")
+    pending = cursor.fetchall()
+    
+    if not pending:
+        return True
+    
+    synced_count = 0
+    errors = []
+    
+    for p in pending:
+        try:
+            table = p["table_name"]
+            record_id = p["record_id"]
+            action = p["action"]
+            
+            if table == "chat_profiles" and action in ["insert", "upsert", "update"]:
+                cursor.execute("SELECT * FROM chat_profiles WHERE google_id = ?", (record_id,))
+                row = cursor.fetchone()
+                if row:
+                    profile = dict(row)
+                    r = _requests.post(
+                        f"{SUPABASE_URL}/rest/v1/chat_profiles",
+                        headers={**_supabase_headers(), "Prefer": "resolution=merge-duplicates"},
+                        json={
+                            "google_id": profile["google_id"],
+                            "email": profile["email"],
+                            "display_name": profile["display_name"],
+                            "public_key": profile.get("public_key"),
+                            "updated_at": profile["updated_at"],
+                        },
+                        timeout=8,
+                    )
+                    if r.status_code < 400:
+                        cursor.execute("DELETE FROM pending_sync WHERE id = ?", (p["id"],))
+                        conn.commit()
+                        synced_count += 1
+                    else:
+                        errors.append(f"chat_profiles {record_id}: HTTP {r.status_code}")
+            
+            elif table == "chat_friends" and action == "insert":
+                cursor.execute("SELECT * FROM chat_friends WHERE id = ?", (record_id,))
+                row = cursor.fetchone()
+                if row:
+                    friend = dict(row)
+                    r = _requests.post(
+                        f"{SUPABASE_URL}/rest/v1/chat_friends",
+                        headers={**_supabase_headers(), "Prefer": "resolution=merge-duplicates"},
+                        json={
+                            "owner_google_id": friend["owner_google_id"],
+                            "owner_email": friend.get("owner_email"),
+                            "friend_google_id": friend.get("friend_google_id"),
+                            "friend_email": friend.get("friend_email"),
+                            "friend_display_name": friend.get("friend_display_name"),
+                        },
+                        timeout=8,
+                    )
+                    if r.status_code < 400:
+                        cursor.execute("DELETE FROM pending_sync WHERE id = ?", (p["id"],))
+                        conn.commit()
+                        synced_count += 1
+                    else:
+                        errors.append(f"chat_friends {record_id}: HTTP {r.status_code}")
+            
+            elif table == "chat_friends" and action == "delete":
+                r = _requests.delete(
+                    f"{SUPABASE_URL}/rest/v1/chat_friends",
+                    headers=_supabase_headers(),
+                    params={
+                        "owner_google_id": f"eq.{record_id}",
+                        "friend_google_id": f"eq.{record_id}"
+                    },
+                    timeout=8,
+                )
+                if r.status_code < 400:
+                    cursor.execute("DELETE FROM pending_sync WHERE id = ?", (p["id"],))
+                    conn.commit()
+                    synced_count += 1
+                else:
+                    errors.append(f"chat_friends delete {record_id}: HTTP {r.status_code}")
+            
+            elif table == "chat_direct_messages" and action == "insert":
+                cursor.execute("SELECT * FROM chat_direct_messages WHERE id = ?", (record_id,))
+                row = cursor.fetchone()
+                if row:
+                    msg = dict(row)
+                    r = _requests.post(
+                        f"{SUPABASE_URL}/rest/v1/chat_direct_messages",
+                        headers=_supabase_headers(),
+                        json={
+                            "dm_room": msg["dm_room"],
+                            "sender_google_id": msg["sender_google_id"],
+                            "sender_name": msg["sender_name"],
+                            "recipient_google_id": msg["recipient_google_id"],
+                            "type": msg["type"],
+                            "ciphertext": msg["ciphertext"],
+                            "client_id": msg.get("client_id"),
+                            "reply_to": msg.get("reply_to"),
+                            "mime": msg.get("mime"),
+                            "duration": msg.get("duration"),
+                        },
+                        timeout=8,
+                    )
+                    if r.status_code < 400:
+                        cursor.execute(
+                            "UPDATE chat_direct_messages SET synced = 1 WHERE id = ?",
+                            (record_id,)
+                        )
+                        cursor.execute("DELETE FROM pending_sync WHERE id = ?", (p["id"],))
+                        conn.commit()
+                        synced_count += 1
+                    else:
+                        errors.append(f"chat_direct_messages {record_id}: HTTP {r.status_code}")
+            
+            elif table == "chat_friend_requests" and action == "insert":
+                cursor.execute("SELECT * FROM chat_friend_requests WHERE id = ?", (record_id,))
+                row = cursor.fetchone()
+                if row:
+                    req = dict(row)
+                    r = _requests.post(
+                        f"{SUPABASE_URL}/rest/v1/chat_friend_requests",
+                        headers=_supabase_headers(),
+                        json={
+                            "sender_google_id": req["sender_google_id"],
+                            "sender_email": req.get("sender_email"),
+                            "recipient_google_id": req.get("recipient_google_id"),
+                            "recipient_email": req.get("recipient_email"),
+                            "status": req["status"],
+                        },
+                        timeout=8,
+                    )
+                    if r.status_code < 400:
+                        cursor.execute("DELETE FROM pending_sync WHERE id = ?", (p["id"],))
+                        conn.commit()
+                        synced_count += 1
+                    else:
+                        errors.append(f"chat_friend_requests {record_id}: HTTP {r.status_code}")
+            
+            elif table == "chat_notifications" and action == "insert":
+                cursor.execute("SELECT * FROM chat_notifications WHERE id = ?", (record_id,))
+                row = cursor.fetchone()
+                if row:
+                    notif = dict(row)
+                    r = _requests.post(
+                        f"{SUPABASE_URL}/rest/v1/chat_notifications",
+                        headers=_supabase_headers(),
+                        json={
+                            "owner_google_id": notif["owner_google_id"],
+                            "kind": notif["kind"],
+                            "title": notif["title"],
+                            "body": notif.get("body", ""),
+                            "room_code": notif.get("room_code"),
+                            "read": bool(notif.get("read", 0)),
+                        },
+                        timeout=8,
+                    )
+                    if r.status_code < 400:
+                        cursor.execute("DELETE FROM pending_sync WHERE id = ?", (p["id"],))
+                        conn.commit()
+                        synced_count += 1
+                    else:
+                        errors.append(f"chat_notifications {record_id}: HTTP {r.status_code}")
+            
+            # Update attempts
+            cursor.execute(
+                "UPDATE pending_sync SET attempts = attempts + 1 WHERE id = ?",
+                (p["id"],)
+            )
+            conn.commit()
+            
+        except Exception as e:
+            errors.append(f"{table} {record_id}: {str(e)}")
+    
+    logging.info(f"Synced {synced_count} pending items to Supabase. Errors: {len(errors)}")
+    if errors:
+        logging.info(f"Sync errors: {errors}")
+    
+    return synced_count > 0
+
+
+def start_sync_worker():
+    """Background thread to periodically sync pending changes to Supabase."""
+    def sync_loop():
+        while True:
+            time.sleep(30)  # Check every 30 seconds
+            if supabase_available() and not DB_STATUS["ok"]:
+                # Supabase was down, now try to sync
+                if check_db_status():
+                    sync_pending_to_supabase()
+    
+    t = threading.Thread(target=sync_loop, daemon=True)
+    t.start()
 
 
 # ── Helper functions for DMs ──
@@ -1539,5 +2421,8 @@ def api_search_gifs():
 # =============================================================================
 
 if __name__ == "__main__":
+    # Start the sync worker thread
+    start_sync_worker()
+    
     debug = True
     socketio.run(app, host="0.0.0.0", port=10000, debug=debug, use_reloader=debug)
