@@ -95,6 +95,7 @@ ADMIN_PASSWORD_HASH = os.environ.get(
     generate_password_hash(os.environ.get("ADMIN_PASSWORD", "changeme"))
 )
 TOTP_SECRET = os.environ.get("TOTP_SECRET", "")
+ADMIN_EMAILS = os.environ.get("ADMIN_EMAILS", "").split(",") if os.environ.get("ADMIN_EMAILS") else []
 
 # ── Supabase (friends storage) ──
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "").rstrip("/")
@@ -203,6 +204,18 @@ def _init_local_db(conn):
         )
     """)
     
+    # chat_announcements - admin announcements
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS chat_announcements (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            title TEXT NOT NULL,
+            content TEXT NOT NULL,
+            is_active INTEGER NOT NULL DEFAULT 1,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
     # pending_sync - messages to sync to Supabase when it comes back
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS pending_sync (
@@ -326,6 +339,18 @@ def record_success(key):
         _login_attempts.pop(key, None)
 
 def require_admin():
+    # Auto-login as admin if user's email is in ADMIN_EMAILS
+    if session.get("is_admin"):
+        return
+    
+    # Check if logged-in user's email is in admin list
+    user_email = session.get("google_email", "")
+    if user_email and user_email in ADMIN_EMAILS:
+        session.permanent = True
+        session["is_admin"] = True
+        return
+    
+    # Otherwise require explicit admin login
     if not session.get("is_admin"):
         abort(403)
 
@@ -918,6 +943,88 @@ def sb_mark_notifications_read(owner_google_id):
     return lb_mark_notifications_read(owner_google_id)
 
 
+#  Announcement Functions 
+def sb_list_announcements(active_only=True):
+    if supabase_available():
+        try:
+            params = {"order": "created_at.desc"}
+            if active_only:
+                params["is_active"] = "eq.true"
+            r = _requests.get(
+                f"{SUPABASE_URL}/rest/v1/chat_announcements",
+                headers=_supabase_headers(),
+                params=params,
+                timeout=8,
+            )
+            r.raise_for_status()
+            return r.json()
+        except Exception as e:
+            logging.info(f"Supabase list_announcements failed, falling back to local: {e}")
+    return lb_list_announcements(active_only)
+
+
+def sb_create_announcement(title, content):
+    if not title or not content:
+        return False, "Title and content required"
+    
+    if supabase_available():
+        try:
+            r = _requests.post(
+                f"{SUPABASE_URL}/rest/v1/chat_announcements",
+                headers=_supabase_headers(),
+                json={"title": title, "content": content, "is_active": True},
+                timeout=8,
+            )
+            if r.status_code < 400:
+                return True, None
+        except Exception as e:
+            logging.info(f"Supabase create_announcement failed, falling back to local: {e}")
+    
+    return lb_create_announcement(title, content)
+
+
+def sb_delete_announcement(announcement_id):
+    if not announcement_id:
+        return False
+    
+    if supabase_available():
+        try:
+            r = _requests.delete(
+                f"{SUPABASE_URL}/rest/v1/chat_announcements",
+                headers=_supabase_headers(),
+                params={"id": f"eq.{announcement_id}"},
+                timeout=8,
+            )
+            if r.status_code < 400:
+                return True
+        except Exception as e:
+            logging.info(f"Supabase delete_announcement failed, falling back to local: {e}")
+    
+    return lb_delete_announcement(announcement_id)
+
+
+def sb_toggle_announcement(announcement_id, is_active):
+    if not announcement_id:
+        return False
+    
+    if supabase_available():
+        try:
+            r = _requests.patch(
+                f"{SUPABASE_URL}/rest/v1/chat_announcements",
+                headers=_supabase_headers(),
+                params={"id": f"eq.{announcement_id}"},
+                json={"is_active": is_active, "updated_at": datetime.datetime.utcnow().isoformat()},
+                timeout=8,
+            )
+            if r.status_code < 400:
+                return True
+        except Exception as e:
+            logging.info(f"Supabase toggle_announcement failed, falling back to local: {e}")
+    
+    return lb_toggle_announcement(announcement_id, is_active)
+
+
+
 # ── Local Database Functions (Fallback) ──
 def lb_list_friends(owner_google_id):
     """Local SQLite fallback for listing friends."""
@@ -1343,6 +1450,104 @@ def lb_mark_notifications_read(owner_google_id):
     """Local SQLite fallback for marking notifications as read."""
     if not owner_google_id:
         return False
+
+
+def lb_list_announcements(active_only=True):
+    """Local SQLite fallback for listing announcements."""
+    try:
+        conn = _get_local_db()
+        cursor = conn.cursor()
+        if active_only:
+            cursor.execute(
+                "SELECT * FROM chat_announcements WHERE is_active = 1 ORDER BY created_at DESC",
+            )
+        else:
+            cursor.execute(
+                "SELECT * FROM chat_announcements ORDER BY created_at DESC",
+            )
+        rows = [dict(r) for r in cursor.fetchall()]
+        return rows
+    except Exception as e:
+        logging.info(f"Local DB list_announcements failed: {e}")
+        return []
+
+
+def lb_create_announcement(title, content):
+    """Local SQLite fallback for creating announcement."""
+    if not title or not content:
+        return False, "Title and content required"
+    try:
+        conn = _get_local_db()
+        cursor = conn.cursor()
+        cursor.execute(
+            """INSERT INTO chat_announcements 
+               (title, content, is_active, created_at, updated_at)
+               VALUES (?, ?, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)""",
+            (title, content)
+        )
+        conn.commit()
+        
+        # Mark for sync to Supabase
+        cursor.execute(
+            "INSERT INTO pending_sync (table_name, record_id, action) VALUES (?, ?, ?)",
+            ("chat_announcements", cursor.lastrowid, "insert")
+        )
+        conn.commit()
+        return True, None
+    except Exception as e:
+        logging.info(f"Local DB create_announcement failed: {e}")
+        return False, str(e)
+
+
+def lb_delete_announcement(announcement_id):
+    """Local SQLite fallback for deleting announcement."""
+    if not announcement_id:
+        return False
+    try:
+        conn = _get_local_db()
+        cursor = conn.cursor()
+        cursor.execute(
+            "DELETE FROM chat_announcements WHERE id = ?",
+            (announcement_id,)
+        )
+        conn.commit()
+        
+        # Mark for sync to Supabase
+        cursor.execute(
+            "INSERT INTO pending_sync (table_name, record_id, action) VALUES (?, ?, ?)",
+            ("chat_announcements", announcement_id, "delete")
+        )
+        conn.commit()
+        return True
+    except Exception as e:
+        logging.info(f"Local DB delete_announcement failed: {e}")
+        return False
+
+
+def lb_toggle_announcement(announcement_id, is_active):
+    """Local SQLite fallback for toggling announcement active status."""
+    if not announcement_id:
+        return False
+    try:
+        conn = _get_local_db()
+        cursor = conn.cursor()
+        cursor.execute(
+            "UPDATE chat_announcements SET is_active = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+            (1 if is_active else 0, announcement_id)
+        )
+        conn.commit()
+        
+        # Mark for sync to Supabase
+        cursor.execute(
+            "INSERT INTO pending_sync (table_name, record_id, action) VALUES (?, ?, ?)",
+            ("chat_announcements", announcement_id, "update")
+        )
+        conn.commit()
+        return True
+    except Exception as e:
+        logging.info(f"Local DB toggle_announcement failed: {e}")
+        return False
+
     try:
         conn = _get_local_db()
         cursor = conn.cursor()
@@ -2196,6 +2401,65 @@ def admin_push_broadcast():
         sent += 1
     flash(f"Push sent to {sent} subscribed device(s).", "info")
     return redirect(url_for("admin_dashboard"))
+
+
+#  Admin Announcements 
+@app.route("/admin/announcements")
+def admin_announcements():
+    require_admin()
+    announcements = sb_list_announcements(active_only=False)
+    return render_template("admin_announcements.html", announcements=announcements)
+
+
+@app.route("/admin/announcements/create", methods=["POST"])
+@rate_limited("admin_create_announcement")
+def admin_create_announcement():
+    require_admin()
+    check_csrf()
+    title = (request.form.get("title") or "").strip()
+    content = (request.form.get("content") or "").strip()
+    
+    if not title or not content:
+        flash("Title and content are required.", "error")
+        return redirect(url_for("admin_announcements"))
+    
+    ok, err = sb_create_announcement(title, content)
+    if ok:
+        flash("Announcement created!", "info")
+    else:
+        flash(f"Failed to create announcement: {err}", "error")
+    return redirect(url_for("admin_announcements"))
+
+
+@app.route("/admin/announcements/<int:announcement_id>/delete", methods=["POST"])
+@rate_limited("admin_delete_announcement")
+def admin_delete_announcement(announcement_id):
+    require_admin()
+    check_csrf()
+    ok = sb_delete_announcement(announcement_id)
+    if ok:
+        flash("Announcement deleted.", "info")
+    else:
+        flash("Failed to delete announcement.", "error")
+    return redirect(url_for("admin_announcements"))
+
+
+@app.route("/admin/announcements/<int:announcement_id>/toggle", methods=["POST"])
+@rate_limited("admin_toggle_announcement")
+def admin_toggle_announcement(announcement_id):
+    require_admin()
+    check_csrf()
+    # Find current status
+    announcements = sb_list_announcements(active_only=False)
+    current = next((a for a in announcements if a["id"] == announcement_id), None)
+    new_status = not current.get("is_active", False) if current else True
+    
+    ok = sb_toggle_announcement(announcement_id, new_status)
+    if ok:
+        flash(f"Announcement {'activated' if new_status else 'deactivated'}.", "info")
+    else:
+        flash("Failed to toggle announcement.", "error")
+    return redirect(url_for("admin_announcements"))
 
 
 # =============================================================================
