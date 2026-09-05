@@ -34,7 +34,85 @@
       html.setAttribute("data-theme", next);
       localStorage.setItem("theme", next);
     }
+
+    // Database status monitoring
+    function checkDbStatus() {
+      return fetch('/api/db/status')
+        .then(r => r.json())
+        .catch(() => ({ ok: false, error: 'Network error', configured: true }));
+    }
+
+    function showDbAlert(configured, ok, error) {
+      // Only show if DB is configured but not working
+      if (!configured) return;
+      
+      const existing = document.getElementById('db-status-alert');
+      if (existing) existing.remove();
+      
+      if (!ok) {
+        const alert = document.createElement('div');
+        alert.id = 'db-status-alert';
+        alert.className = 'db-alert';
+        alert.innerHTML = `
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16">
+            <circle cx="12" cy="12" r="10"/>
+            <line x1="12" y1="8" x2="12" y2="12"/>
+            <line x1="12" y1="16" x2="12.01" y2="16"/>
+          </svg>
+          <span>⚠️ Database issue: ${error || 'Service unavailable'}. Some features may be limited.</span>
+          <button onclick="this.closest('.db-alert').remove()" title="Dismiss">&times;</button>
+        `;
+        document.body.prepend(alert);
+        
+        // Auto-retry every 30 seconds
+        setTimeout(checkDbStatusAndAlert, 30000);
+      }
+    }
+
+    function checkDbStatusAndAlert() {
+      checkDbStatus().then(status => {
+        showDbAlert(status.configured, status.ok, status.error);
+      });
+    }
+
+    // Check DB status on page load (with delay to avoid blocking render)
+    setTimeout(checkDbStatusAndAlert, 2000);
   </script>
+  <style>
+    .db-alert {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      z-index: 10000;
+      padding: 12px 20px;
+      background: #fef3c7;
+      border-bottom: 1px solid #fde68a;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-size: 14px;
+      color: #92400e;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+    .db-alert svg {
+      flex-shrink: 0;
+      color: #f59e0b;
+    }
+    .db-alert button {
+      margin-left: auto;
+      background: none;
+      border: none;
+      font-size: 20px;
+      cursor: pointer;
+      color: #92400e;
+      padding: 0;
+      line-height: 1;
+    }
+    .db-alert button:hover {
+      color: #f59e0b;
+    }
+  </style>
 </head>
 <body>
 

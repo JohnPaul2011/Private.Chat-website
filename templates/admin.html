@@ -332,6 +332,35 @@
             color: var(--admin-text-muted);
             font-size: 14px;
         }
+        .db-alert-admin {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 16px 20px;
+            background: rgba(245, 158, 11, 0.15);
+            border: 1px solid var(--admin-warning);
+            border-radius: 12px;
+            margin-bottom: 20px;
+            color: var(--admin-warning);
+            font-size: 15px;
+        }
+        .db-alert-admin svg {
+            flex-shrink: 0;
+            color: var(--admin-warning);
+        }
+        .db-alert-admin button {
+            margin-left: auto;
+            background: none;
+            border: none;
+            font-size: 24px;
+            cursor: pointer;
+            color: var(--admin-warning);
+            padding: 0;
+            line-height: 1;
+        }
+        .db-alert-admin button:hover {
+            color: var(--admin-text);
+        }
 
         @media (max-width: 768px) {
             .admin-header {
@@ -367,6 +396,19 @@
                 <a href="/admin/logout">Logout</a>
             </nav>
         </header>
+        
+        {% if not db_ok and db_configured %}
+        <div class="db-alert-admin">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20">
+                <circle cx="12" cy="12" r="10"/>
+                <line x1="12" y1="8" x2="12" y2="12"/>
+                <line x1="12" y1="16" x2="12.01" y2="16"/>
+            </svg>
+            <strong>⚠️ Database Connection Issue</strong>
+            <span>{{ db_error or 'Service unavailable' }}</span>
+            <button onclick="this.closest('.db-alert-admin').remove()" title="Dismiss">&times;</button>
+        </div>
+        {% endif %}
 
         <main>
             <!-- Stats Cards -->

@@ -109,6 +109,53 @@ def _supabase_headers():
 def supabase_available():
     return bool(SUPABASE_URL and SUPABASE_SERVICE_KEY)
 
+
+# ── Database Status Check ──
+DB_STATUS = {"ok": True, "last_check": 0, "last_error": None}
+DB_CHECK_INTERVAL = 60  # seconds
+
+def check_db_status():
+    """Check if Supabase is accessible and update status."""
+    global DB_STATUS
+    now = time.time()
+    if now - DB_STATUS["last_check"] < DB_CHECK_INTERVAL:
+        return DB_STATUS["ok"]
+    
+    DB_STATUS["last_check"] = now
+    if not supabase_available():
+        DB_STATUS["ok"] = False
+        DB_STATUS["last_error"] = "Supabase not configured"
+        return False
+    
+    try:
+        r = _requests.get(
+            f"{SUPABASE_URL}/rest/v1/",
+            headers=_supabase_headers(),
+            timeout=5,
+        )
+        if r.status_code < 500:
+            DB_STATUS["ok"] = True
+            DB_STATUS["last_error"] = None
+            return True
+        else:
+            DB_STATUS["ok"] = False
+            DB_STATUS["last_error"] = f"HTTP {r.status_code}"
+            return False
+    except Exception as e:
+        DB_STATUS["ok"] = False
+        DB_STATUS["last_error"] = str(e)
+        return False
+
+
+def get_db_status():
+    """Get current database status for client alerts."""
+    check_db_status()  # Ensure fresh check
+    return {
+        "ok": DB_STATUS["ok"],
+        "error": DB_STATUS["last_error"],
+        "configured": supabase_available()
+    }
+
 # ── Helper Functions ──
 def email_to_name(email):
     if not email or "@" not in email:
@@ -711,15 +758,44 @@ def _verify_google_session_once():
         session["_google_verified"] = True
 
 
+@app.before_request
+def _check_db_and_alert():
+    """Check database status and add alert to all responses if down."""
+    db_status = get_db_status()
+    if not db_status["ok"] and db_status["configured"]:
+        # Database is configured but not responding
+        # Add a flash message for any page that might need DB
+        if request.endpoint and request.endpoint not in ['static', 'vapid_public_key']:
+            if not session.get("_db_alert_shown"):
+                flash(
+                    f"⚠️ Database connection issue: {db_status['error'] or 'Service unavailable'}. "
+                    "Some features may be limited.",
+                    "warning"
+                )
+                session["_db_alert_shown"] = True
+            elif session.get("_db_alert_shown") and request.endpoint in ['index', 'account']:
+                # Re-check and clear if back online
+                if DB_STATUS["ok"]:
+                    session.pop("_db_alert_shown", None)
+
+
 @app.route("/")
 def index():
     gid = session.get("google_id")
     friends, notifications, pending_requests, outgoing_requests = [], [], [], []
+    db_ok = True
+    db_error = None
+    
     if gid:
-        friends = sb_list_friends(gid)
-        notifications = sb_list_notifications(gid, limit=20)
-        pending_requests = sb_list_incoming_requests(gid)
-        outgoing_requests = sb_list_outgoing_requests(gid)
+        db_ok = check_db_status()
+        if db_ok:
+            friends = sb_list_friends(gid)
+            notifications = sb_list_notifications(gid, limit=20)
+            pending_requests = sb_list_incoming_requests(gid)
+            outgoing_requests = sb_list_outgoing_requests(gid)
+        else:
+            db_error = DB_STATUS["last_error"]
+    
     return render_template(
         "index.html",
         username=session.get("preferred_name") or session.get("name", "Guest"),
@@ -730,6 +806,9 @@ def index():
         home_notifications=notifications,
         pending_requests=pending_requests,
         outgoing_requests=outgoing_requests,
+        db_ok=db_ok,
+        db_error=db_error,
+        db_configured=supabase_available(),
     )
 
 
@@ -1104,42 +1183,74 @@ def admin_logout():
 def admin_dashboard():
     require_admin()
     stats = get_admin_stats()
+    db_ok = check_db_status()
+    db_error = DB_STATUS["last_error"] if not db_ok else None
     
     # Get all users with active sessions
     all_users = []
-    with _state_lock:
-        for gid, user_data in connected_users.items():
-            profile = sb_get_profile(gid)
-            all_users.append({
-                "google_id": gid,
-                "name": user_data.get("name", "Unknown"),
-                "email": user_data.get("email", ""),
-                "connected_at": user_data.get("connected_at", ""),
-                "last_active": user_data.get("last_active", ""),
-                "display_name": profile.get("display_name", "") if profile else "",
-            })
+    if db_ok:
+        with _state_lock:
+            for gid, user_data in connected_users.items():
+                profile = sb_get_profile(gid)
+                all_users.append({
+                    "google_id": gid,
+                    "name": user_data.get("name", "Unknown"),
+                    "email": user_data.get("email", ""),
+                    "connected_at": user_data.get("connected_at", ""),
+                    "last_active": user_data.get("last_active", ""),
+                    "display_name": profile.get("display_name", "") if profile else "",
+                })
+    else:
+        # Fallback: show connected users from memory
+        with _state_lock:
+            for gid, user_data in connected_users.items():
+                all_users.append({
+                    "google_id": gid,
+                    "name": user_data.get("name", "Unknown"),
+                    "email": user_data.get("email", ""),
+                    "connected_at": user_data.get("connected_at", ""),
+                    "last_active": user_data.get("last_active", ""),
+                    "display_name": "",
+                })
     
     # Get active DM rooms
     active_dms = []
-    with _state_lock:
-        for dm_room, room_data in active_dm_rooms.items():
-            user1 = sb_get_profile(room_data.get("user1_gid"))
-            user2 = sb_get_profile(room_data.get("user2_gid"))
-            active_dms.append({
-                "dm_room": dm_room,
-                "user1": user1.get("display_name", "Unknown") if user1 else "Unknown",
-                "user1_email": user1.get("email", "") if user1 else "",
-                "user2": user2.get("display_name", "Unknown") if user2 else "Unknown",
-                "user2_email": user2.get("email", "") if user2 else "",
-                "created_at": room_data.get("created_at", ""),
-                "message_count": room_data.get("message_count", 0),
-            })
+    if db_ok:
+        with _state_lock:
+            for dm_room, room_data in active_dm_rooms.items():
+                user1 = sb_get_profile(room_data.get("user1_gid"))
+                user2 = sb_get_profile(room_data.get("user2_gid"))
+                active_dms.append({
+                    "dm_room": dm_room,
+                    "user1": user1.get("display_name", "Unknown") if user1 else "Unknown",
+                    "user1_email": user1.get("email", "") if user1 else "",
+                    "user2": user2.get("display_name", "Unknown") if user2 else "Unknown",
+                    "user2_email": user2.get("email", "") if user2 else "",
+                    "created_at": room_data.get("created_at", ""),
+                    "message_count": room_data.get("message_count", 0),
+                })
+    else:
+        # Fallback: show DM rooms from memory
+        with _state_lock:
+            for dm_room, room_data in active_dm_rooms.items():
+                active_dms.append({
+                    "dm_room": dm_room,
+                    "user1": "User",
+                    "user1_email": "",
+                    "user2": "User",
+                    "user2_email": "",
+                    "created_at": room_data.get("created_at", ""),
+                    "message_count": room_data.get("message_count", 0),
+                })
     
     return render_template(
         "admin.html",
         stats=stats,
         users=all_users,
         active_dms=active_dms,
+        db_ok=db_ok,
+        db_error=db_error,
+        db_configured=supabase_available(),
     )
 
 
@@ -1188,6 +1299,17 @@ def admin_push_broadcast():
         sent += 1
     flash(f"Push sent to {sent} subscribed device(s).", "info")
     return redirect(url_for("admin_dashboard"))
+
+
+# =============================================================================
+# API: Database Status
+# =============================================================================
+
+@app.route("/api/db/status")
+def api_db_status():
+    """Public endpoint to check database status from client-side JavaScript."""
+    status = get_db_status()
+    return jsonify(status)
 
 
 # =============================================================================
