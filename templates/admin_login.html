@@ -19,7 +19,7 @@
     },3000);
   </script>
 </head>
-<body>
+<body hx-boost="true">
   {% with messages = get_flashed_messages(with_categories=true) %}
   {% if messages %}{% for category, message in messages %}
   <div class="flash-msg flash-{{ category }}">{{ message }}</div>

@@ -6,6 +6,8 @@
   <title>Private.chat - Direct Chat</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}"/>
   <script src="{{ url_for('static', filename='socket.io.min.js') }}"></script>
+  <script src="{{ url_for('static', filename='htmx.min.js') }}"></script>
+  <script src="{{ url_for('static', filename='htmx.min.js') }}"></script>
   <script>
     // Apply theme before render to avoid flash.
     (function() {
@@ -114,7 +116,7 @@
     }
   </style>
 </head>
-<body>
+<body hx-boost="true">
 
   {% with messages = get_flashed_messages(with_categories=true) %}
   {% if messages %}
