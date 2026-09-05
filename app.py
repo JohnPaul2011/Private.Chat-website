@@ -260,7 +260,7 @@ def check_db_status():
             return False
     except Exception as e:
         DB_STATUS["ok"] = False
-        DB_STATUS["last_error"] = str(e)
+        DB_STATUS["last_error"] = "Connection failed"
         return False
 
 
@@ -964,7 +964,7 @@ def lb_add_friend(owner_google_id, owner_email, friend_google_id, friend_email, 
         return True, None
     except Exception as e:
         logging.info(f"Local DB add_friend failed: {e}")
-        return False, str(e)
+        return False, "Database error"
 
 
 def lb_remove_friend(owner_google_id, friend_google_id):
@@ -1063,7 +1063,7 @@ def lb_upsert_profile(google_id, email, display_name):
         return True, None
     except Exception as e:
         logging.info(f"Local DB upsert_profile failed: {e}")
-        return False, str(e)
+        return False, "Database error"
 
 
 def lb_set_public_key(google_id, public_key_b64):
@@ -1190,7 +1190,7 @@ def lb_create_friend_request(sender_gid, sender_email, recipient_email, recipien
         return True, None
     except Exception as e:
         logging.info(f"Local DB create_friend_request failed: {e}")
-        return False, str(e)
+        return False, "Database error"
 
 
 def lb_list_incoming_requests(recipient_gid, status="pending"):
@@ -1561,7 +1561,7 @@ def sync_pending_to_supabase():
             conn.commit()
             
         except Exception as e:
-            errors.append(f"{table} {record_id}: {str(e)}")
+            errors.append(f"{table} {record_id}: sync error")
     
     logging.info(f"Synced {synced_count} pending items to Supabase. Errors: {len(errors)}")
     if errors:

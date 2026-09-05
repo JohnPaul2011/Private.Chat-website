@@ -127,7 +127,7 @@
   <div class="title">
     <div class="title-left">
       <h1>Private.chat</h1>
-      <h3>Hello, {{ username }}</h3>
+      <h3>Hello, {{ username | e }}</h3>
     </div>
     <div class="title-actions">
       <button class="theme-toggle" onclick="toggleTheme()" title="Toggle theme">
@@ -302,7 +302,7 @@
             {% set femail = f.friend_email or '' %}
             {% set fchar = (fname or femail or '?')[0] | upper %}
             <div class="sidebar-contact-item {% if loop.first %}active{% endif %}" 
-                 data-friend-gid="{{ f.friend_google_id or f.friend_email }}"
+                 data-friend-gid="{{ (f.friend_google_id or f.friend_email) | tojson }}"
                  data-chat-name="{{ fname }}"
                  data-friend-email="{{ femail }}"
                  data-initial="{{ fchar }}"
@@ -380,7 +380,7 @@
                 {% for f in home_friends %}
                 {% set fname = f.friend_display_name or (f.friend_email.split('@')[0] if f.friend_email else 'Friend') %}
                 {% set femail = f.friend_email or '' %}
-                <option value="{{ f.friend_google_id or f.friend_email }}" 
+                <option value="{{ (f.friend_google_id or f.friend_email) | tojson }}" 
                         data-name="{{ fname }}" 
                         data-email="{{ femail }}"
                         data-initial="{{ (fname or femail or '?')[0] | upper }}"
@@ -558,8 +558,8 @@
     let currentFriendName = null;
     let currentFriendEmail = null;
     let dmRoom = null;
-    let myGoogleId = "{{ google_id }}";
-    let myPreferredName = "{{ username }}";
+    let myGoogleId = "{{ google_id | tojson }}";
+    let myPreferredName = "{{ username | tojson }}";
     let messageBuffer = [];
 
     // Initialize
