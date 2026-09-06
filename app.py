@@ -19,7 +19,7 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 from colorama import init as init_color
 from pywebpush import webpush, WebPushException
 from authlib.integrations.flask_client import OAuth
-import time, logging, re, hmac, hashlib, secrets, base64, struct, datetime, threading, uuid, json
+import time, logging, re, hmac, hashlib, secrets, base64, struct, datetime, threading, uuid, json, functools
 import requests as _requests
 import sqlite3 as _sqlite3
 
@@ -387,7 +387,7 @@ def get_csrf_token():
 
 app.jinja_env.globals["csrf_token"] = get_csrf_token
 
-def rate_limited(name):
+def _is_rate_limited(name):
     with _state_lock:
         now = time.time()
         bucket = _msg_counters.setdefault(name, [])
@@ -396,6 +396,21 @@ def rate_limited(name):
             return True
         bucket.append(now)
         return False
+
+def rate_limited(name):
+    """Decorator factory: @rate_limited("bucket_name") on a route rejects with 429
+    once that bucket exceeds RATE_LIMIT_MAX hits within RATE_LIMIT_WINDOW seconds."""
+    def decorator(fn):
+        @functools.wraps(fn)
+        def wrapper(*args, **kwargs):
+            if _is_rate_limited(name):
+                if request.path.startswith("/api/") or request.is_json or request.headers.get("X-Requested-With") == "XMLHttpRequest":
+                    return jsonify({"ok": False, "error": "Too many requests. Please slow down."}), 429
+                flash("Too many requests. Please slow down and try again shortly.", "error")
+                return redirect(request.referrer or url_for("index"))
+            return fn(*args, **kwargs)
+        return wrapper
+    return decorator
 
 def totp_now(secret, step=30, digits=6, t=None):
     key = base64.b32decode(secret.upper() + "=" * ((8 - len(secret) % 8) % 8))
