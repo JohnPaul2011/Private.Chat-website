@@ -3414,9 +3414,10 @@ body, .title, ul, .container, .navbar-msg, .inputs,
 
 .chat-input-pill {
   width: 100% !important;
+  min-height: 44px;
   background: var(--wa-chat-input);
   border: 1px solid var(--form-border);
-  border-radius: 28px;
+  border-radius: 24px;
   display: flex !important;
   flex-direction: row !important;
   align-items: center !important;
@@ -3489,15 +3490,16 @@ body, .title, ul, .container, .navbar-msg, .inputs,
   font-size: 14.5px !important;
   font-family: var(--font-main);
   outline: none !important;
-  padding: 8px 8px !important;
+  padding: 6px 8px !important;
   margin: 0 !important;
   border-radius: 0 !important;
   box-shadow: none !important;
-  line-height: 1.4;
+  line-height: 20px;
   white-space: pre-wrap;
   word-break: break-word;
   max-height: 120px;
   overflow-y: auto;
+  align-self: center;
 }
 
 .chat-input-field:empty::before {
@@ -3512,14 +3514,16 @@ body, .title, ul, .container, .navbar-msg, .inputs,
   opacity: 0.8;
 }
 
+#dm-mic-btn.hidden, #dm-send-btn.hidden { display: none !important; }
+
 .chat-send-btn {
-  width: 36px !important;
-  min-width: 36px !important;
-  max-width: 36px !important;
-  height: 36px !important;
+  width: 32px !important;
+  min-width: 32px !important;
+  max-width: 32px !important;
+  height: 32px !important;
   padding: 0 !important;
   margin: 0 !important;
-  flex: 0 0 36px !important;
+  flex: 0 0 32px !important;
   border-radius: 50% !important;
   background: var(--wa-green) !important;
   color: #fff !important;

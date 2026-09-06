@@ -547,7 +547,7 @@
                 <line x1="8" y1="23" x2="16" y2="23"/>
               </svg>
             </button>
-            <button type="submit" id="dm-send-btn" class="chat-send-btn" title="Send">
+            <button type="submit" id="dm-send-btn" class="chat-send-btn hidden" title="Send">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                 <line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/>
               </svg>
@@ -1561,6 +1561,7 @@
       }
 
       input.textContent = "";
+      updateSendMicToggle();
       cancelDmReply();
       closeGifPanel();
     }
@@ -1890,7 +1891,19 @@
     }
 
     let localTypingTimer = null;
+    function updateSendMicToggle() {
+      const inputEl = document.getElementById("chat-text-input");
+      const micBtn = document.getElementById("dm-mic-btn");
+      const sendBtn = document.getElementById("dm-send-btn");
+      if (!inputEl || !micBtn || !sendBtn) return;
+      if (typeof isDmRecording !== "undefined" && isDmRecording) return;
+      const hasText = (inputEl.textContent || "").trim().length > 0;
+      micBtn.classList.toggle("hidden", hasText);
+      sendBtn.classList.toggle("hidden", !hasText);
+    }
+
     function handleLocalTyping() {
+      updateSendMicToggle();
       if (socketio && socketio.connected) {
         if (currentActiveFriendGid) {
           socketio.emit("dm_typing", { friend_gid: currentActiveFriendGid, active: true });
@@ -1976,6 +1989,7 @@
 
     // Auto-select first active friend on load
     document.addEventListener("DOMContentLoaded", function() {
+      updateSendMicToggle();
       const sel = document.getElementById("chat-friend-selector");
       if (sel) {
         onFriendDropdownChange(sel);
